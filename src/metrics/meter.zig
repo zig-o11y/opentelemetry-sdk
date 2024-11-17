@@ -520,20 +520,24 @@ pub const AggregatedMetrics = struct {
 
     /// Fetch the aggreagted metric from the meter.
     /// Caller owns the returned memory and it should be freed using the AggregatedMetrics allocator.
-    pub fn fetch(self: Self, meter: *Meter, aggregation: view.AggregationSelector) ![]*MeterMeasurements {
-        var result = try self.allocator.alloc(*MeterMeasurements, meter.instruments.count());
+    pub fn fetch(self: Self, meter: *Meter, aggregation: view.AggregationSelector) ![]MeterMeasurements {
+        var result = try self.allocator.alloc(MeterMeasurements, meter.instruments.count());
         var iter = meter.instruments.valueIterator();
         var i: usize = 0;
         while (iter.next()) |instr| {
-            const m = try self.allocator.create(MeterMeasurements);
-            m.* = MeterMeasurements{
-                .name = self.meterName,
+            result[i] = MeterMeasurements{
+                .meterName = self.meterName,
                 .schemaUrl = self.meterSchemaUrl,
+                .instrumentIdentifier = try spec.instrumentIdentifier(
+                    self.allocator,
+                    instr.*.opts.name,
+                    instr.*.kind.toString(),
+                    instr.*.opts.unit orelse "",
+                    instr.*.opts.description orelse "",
+                ),
                 .attributes = self.shareadAttributes,
                 .data = try self.deduplicate(instr.*, aggregation(instr.*.kind)),
             };
-
-            result[i] = m;
             i += 1;
         }
         return result;

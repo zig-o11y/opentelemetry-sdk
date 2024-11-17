@@ -40,13 +40,15 @@ pub const MeasurementsData = union(enum) {
 /// A set of measurements with a schema URL and optional attributes,
 /// representing the data collected by a meter.
 pub const MeterMeasurements = struct {
-    name: []const u8,
-    attributes: ?[]Attribute,
-    schemaUrl: ?[]const u8,
+    meterName: []const u8,
+    attributes: ?[]Attribute = null,
+    schemaUrl: ?[]const u8 = null,
+    instrumentIdentifier: []const u8,
     data: MeasurementsData,
 
     pub fn deinit(self: *MeterMeasurements, allocator: std.mem.Allocator) void {
         self.data.deinit(allocator);
+        allocator.free(self.instrumentIdentifier);
         allocator.destroy(self);
     }
 };

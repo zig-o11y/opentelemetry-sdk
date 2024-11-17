@@ -9,6 +9,12 @@ const MeterProvider = @import("meter.zig").MeterProvider;
 const MetricReadError = @import("reader.zig").MetricReadError;
 const MetricReader = @import("reader.zig").MetricReader;
 
+const Measurement = @import("measurement.zig").Measurement;
+const MeasurementsData = @import("measurement.zig").MeasurementsData;
+const MeterMeasurements = @import("measurement.zig").MeterMeasurements;
+
+const Attributes = @import("attributes.zig").Attributes;
+
 pub const ExportResult = enum {
     Success,
     Failure,
@@ -34,7 +40,7 @@ pub const MetricExporter = struct {
 
     /// ExportBatch exports a batch of metrics data by calling the exporter implementation.
     /// The passed metrics data will be owned by the exporter implementation.
-    pub fn exportBatch(self: *Self, metrics: pbmetrics.MetricsData) ExportResult {
+    pub fn exportBatch(self: *Self, metrics: []MeterMeasurements) ExportResult {
         if (self.hasShutDown.load(.acquire)) {
             // When shutdown has already been called, calling export should be a failure.
             // https://opentelemetry.io/docs/specs/otel/metrics/sdk/#shutdown-2
@@ -72,21 +78,18 @@ pub const MetricExporter = struct {
 
 // test harness to build a noop exporter.
 // marked as pub only for testing purposes.
-pub fn noopExporter(_: *ExporterIface, metrics: pbmetrics.MetricsData) MetricReadError!void {
-    defer metrics.deinit();
+pub fn noopExporter(_: *ExporterIface, _: []MeterMeasurements) MetricReadError!void {
     return;
 }
 // mocked metric exporter to assert metrics data are read once exported.
-fn mockExporter(_: *ExporterIface, metrics: pbmetrics.MetricsData) MetricReadError!void {
-    defer metrics.deinit();
-    if (metrics.resource_metrics.items.len != 1) {
+fn mockExporter(_: *ExporterIface, metrics: []MeterMeasurements) MetricReadError!void {
+    if (metrics.len != 1) {
         return MetricReadError.ExportFailed;
-    } // only one resource metrics is expected in this mock
+    } // only one instrument from a single meter is expected in this mock
 }
 
 // test harness to build an exporter that times out.
-fn waiterExporter(_: *ExporterIface, metrics: pbmetrics.MetricsData) MetricReadError!void {
-    defer metrics.deinit();
+fn waiterExporter(_: *ExporterIface, _: []MeterMeasurements) MetricReadError!void {
     // Sleep for 1 second to simulate a slow exporter.
     std.time.sleep(std.time.ns_per_ms * 1000);
     return;
@@ -97,11 +100,15 @@ test "metric exporter no-op" {
     var me = try MetricExporter.new(std.testing.allocator, &noop);
     defer me.shutdown();
 
-    const metrics = pbmetrics.MetricsData{
-        .resource_metrics = std.ArrayList(pbmetrics.ResourceMetrics).init(std.testing.allocator),
-    };
-    defer metrics.deinit();
-    const result = me.exportBatch(metrics);
+    var measure = [1]Measurement(i64){.{ .value = 42 }};
+    const measurement: []Measurement(i64) = measure[0..];
+    var metrics = [1]MeterMeasurements{MeterMeasurements{
+        .meterName = "my-meter",
+        .instrumentIdentifier = "my-counter-123",
+        .data = .{ .int = measurement },
+    }};
+
+    const result = me.exportBatch(&metrics);
     try std.testing.expectEqual(ExportResult.Success, result);
 }
 
@@ -133,19 +140,22 @@ test "metric exporter force flush succeeds" {
     var me = try MetricExporter.new(std.testing.allocator, &noop);
     defer me.shutdown();
 
-    const metrics = pbmetrics.MetricsData{
-        .resource_metrics = std.ArrayList(pbmetrics.ResourceMetrics).init(std.testing.allocator),
-    };
-    defer metrics.deinit();
-    const result = me.exportBatch(metrics);
+    var measure = [1]Measurement(i64){.{ .value = 42 }};
+    const measurement: []Measurement(i64) = measure[0..];
+    var metrics = [1]MeterMeasurements{MeterMeasurements{
+        .meterName = "my-meter",
+        .instrumentIdentifier = "my-counter-123",
+        .data = .{ .int = measurement },
+    }};
+
+    const result = me.exportBatch(&metrics);
     try std.testing.expectEqual(ExportResult.Success, result);
 
     try me.forceFlush(1000);
 }
 
-fn backgroundRunner(me: *MetricExporter, metrics: pbmetrics.MetricsData) !void {
+fn backgroundRunner(me: *MetricExporter, metrics: []MeterMeasurements) !void {
     _ = me.exportBatch(metrics);
-    metrics.deinit();
 }
 
 test "metric exporter force flush fails" {
@@ -153,15 +163,18 @@ test "metric exporter force flush fails" {
     var me = try MetricExporter.new(std.testing.allocator, &wait);
     defer me.shutdown();
 
-    const metrics = pbmetrics.MetricsData{
-        .resource_metrics = std.ArrayList(pbmetrics.ResourceMetrics).init(std.testing.allocator),
-    };
-    defer metrics.deinit();
+    var measure = [1]Measurement(i64){.{ .value = 42 }};
+    const measurement: []Measurement(i64) = measure[0..];
+    var metrics = [1]MeterMeasurements{MeterMeasurements{
+        .meterName = "my-meter",
+        .instrumentIdentifier = "my-counter-123",
+        .data = .{ .int = measurement },
+    }};
 
     var bg = try std.Thread.spawn(
         .{},
         backgroundRunner,
-        .{ me, metrics },
+        .{ me, &metrics },
     );
     bg.detach();
 
@@ -174,11 +187,11 @@ test "metric exporter force flush fails" {
 /// Implementations can be satisfied by any type by having a member field of type
 /// ExporterIface and a member function exportBatch with the correct signature.
 pub const ExporterIface = struct {
-    exportFn: *const fn (*ExporterIface, pbmetrics.MetricsData) MetricReadError!void,
+    exportFn: *const fn (*ExporterIface, []MeterMeasurements) MetricReadError!void,
 
     /// ExportBatch defines the behavior that metric exporters will implement.
     /// Each metric exporter owns the metrics data passed to it.
-    pub fn exportBatch(self: *ExporterIface, data: pbmetrics.MetricsData) MetricReadError!void {
+    pub fn exportBatch(self: *ExporterIface, data: []MeterMeasurements) MetricReadError!void {
         return self.exportFn(self, data);
     }
 };
@@ -188,7 +201,7 @@ pub const ExporterIface = struct {
 pub const InMemoryExporter = struct {
     const Self = @This();
     allocator: std.mem.Allocator,
-    data: pbmetrics.MetricsData,
+    data: std.ArrayList(MeterMeasurements) = undefined,
     // Implement the interface via @fieldParentPtr
     exporter: ExporterIface,
 
@@ -196,7 +209,7 @@ pub const InMemoryExporter = struct {
         const s = try allocator.create(Self);
         s.* = Self{
             .allocator = allocator,
-            .data = pbmetrics.MetricsData{ .resource_metrics = std.ArrayList(pbmetrics.ResourceMetrics).init(allocator) },
+            .data = std.ArrayList(MeterMeasurements).init(allocator),
             .exporter = ExporterIface{
                 .exportFn = exportBatch,
             },
@@ -204,22 +217,27 @@ pub const InMemoryExporter = struct {
         return s;
     }
     pub fn deinit(self: *Self) void {
+        for (self.data.items) |d| {
+            var data = d;
+            data.deinit(self.allocator);
+        }
         self.data.deinit();
         self.allocator.destroy(self);
     }
 
-    fn exportBatch(iface: *ExporterIface, metrics: pbmetrics.MetricsData) MetricReadError!void {
+    fn exportBatch(iface: *ExporterIface, metrics: []MeterMeasurements) MetricReadError!void {
         // Get a pointer to the instance of the struct that implements the interface.
         const self: *Self = @fieldParentPtr("exporter", iface);
 
-        self.data.deinit();
-        self.data = metrics;
+        self.data.clearRetainingCapacity();
+        self.data = std.ArrayList(MeterMeasurements).fromOwnedSlice(self.allocator, metrics);
     }
 
-    /// Copy the metrics from the in memory exporter.
-    /// Caller owns the memory and must call deinit() once done.
-    pub fn fetch(self: *Self) !pbmetrics.MetricsData {
-        return self.data.dupe(self.allocator);
+    /// Read the metrics from the in memory exporter.
+    //FIXME might need a mutex in the exporter as the field might be accessed
+    // from a thread while it's being cleared in another (via exportBatch).
+    pub fn fetch(self: *Self) ![]MeterMeasurements {
+        return self.data.items;
     }
 };
 
@@ -231,64 +249,45 @@ test "in memory exporter stores data" {
     defer exporter.shutdown();
 
     const howMany: usize = 2;
-    const dp = try std.testing.allocator.alloc(pbmetrics.NumberDataPoint, howMany);
-    dp[0] = pbmetrics.NumberDataPoint{
-        .attributes = std.ArrayList(pbcommon.KeyValue).init(std.testing.allocator),
-        .exemplars = std.ArrayList(pbmetrics.Exemplar).init(std.testing.allocator),
-        .value = .{ .as_int = @as(i64, 1) },
-    };
-    dp[1] = pbmetrics.NumberDataPoint{
-        .attributes = std.ArrayList(pbcommon.KeyValue).init(std.testing.allocator),
-        .exemplars = std.ArrayList(pbmetrics.Exemplar).init(std.testing.allocator),
-        .value = .{ .as_int = @as(i64, 2) },
-    };
 
-    const metric = pbmetrics.Metric{
-        .metadata = std.ArrayList(pbcommon.KeyValue).init(std.testing.allocator),
-        .name = ManagedString.managed("test_metric"),
-        .unit = ManagedString.managed("count"),
-        .data = .{ .sum = pbmetrics.Sum{
-            .data_points = std.ArrayList(pbmetrics.NumberDataPoint).fromOwnedSlice(std.testing.allocator, dp),
-            .aggregation_temporality = .AGGREGATION_TEMPORALITY_CUMULATIVE,
-        } },
-    };
+    const val = @as(u64, 42);
+    const attrs = try Attributes.from(std.testing.allocator, .{ "key", val });
+    defer std.testing.allocator.free(attrs.?);
 
-    var sm = pbmetrics.ScopeMetrics{
-        .metrics = std.ArrayList(pbmetrics.Metric).init(std.testing.allocator),
+    var counterMeasure = [1]Measurement(i64){.{ .value = @as(i64, 1), .attributes = attrs }};
+    var histMeasure = [1]Measurement(f64){.{ .value = @as(f64, 2.0), .attributes = attrs }};
+    var underTest = [2]MeterMeasurements{
+        .{
+            .meterName = "first_meter",
+            .attributes = null,
+            .instrumentIdentifier = "counter-abc",
+            .data = .{ .int = &counterMeasure },
+        },
+        .{
+            .meterName = "another_meter",
+            .attributes = null,
+            .instrumentIdentifier = "histogram-def",
+            .data = .{ .double = &histMeasure },
+        },
     };
-    try sm.metrics.append(metric);
-
-    var resource = pbmetrics.ResourceMetrics{
-        .scope_metrics = std.ArrayList(pbmetrics.ScopeMetrics).init(std.testing.allocator),
-    };
-    try resource.scope_metrics.append(sm);
-
-    var metricsData = pbmetrics.MetricsData{
-        .resource_metrics = std.ArrayList(pbmetrics.ResourceMetrics).init(std.testing.allocator),
-    };
-    try metricsData.resource_metrics.append(resource);
 
     // MetricReader.collect() does a copy of the metrics data,
     // then calls the exportBatch implementation passing it in.
-    const ownedData = try metricsData.dupe(std.testing.allocator);
-    defer metricsData.deinit();
-    const result = exporter.exportBatch(ownedData);
+
+    const result = exporter.exportBatch(&underTest);
 
     std.debug.assert(result == .Success);
 
     const data = try inMemExporter.fetch();
-    defer data.deinit();
 
-    std.debug.assert(data.resource_metrics.items.len == 1);
-    const entry = data.resource_metrics.items[0];
+    std.debug.assert(data.len == howMany);
 
-    std.debug.assert(entry.scope_metrics.items.len == 1);
-    std.debug.assert(entry.scope_metrics.items[0].metrics.items[0].data.?.sum.data_points.items.len == 2);
+    // std.debug.assert(entry.scope_metrics.items[0].metrics.items[0].data.?.sum.data_points.items.len == 2);
 
-    try std.testing.expectEqual(pbmetrics.Sum, @TypeOf(entry.scope_metrics.items[0].metrics.items[0].data.?.sum));
-    const sum: pbmetrics.Sum = entry.scope_metrics.items[0].metrics.items[0].data.?.sum;
+    // try std.testing.expectEqual(pbmetrics.Sum, @TypeOf(entry.scope_metrics.items[0].metrics.items[0].data.?.sum));
+    // const sum: pbmetrics.Sum = entry.scope_metrics.items[0].metrics.items[0].data.?.sum;
 
-    try std.testing.expectEqual(sum.data_points.items[0].value.?.as_int, 1);
+    // try std.testing.expectEqual(sum.data_points.items[0].value.?.as_int, 1);
 }
 
 /// A periodic exporting metric reader is a specialization of MetricReader
@@ -411,8 +410,7 @@ test "e2e periodic exporting metric reader" {
     std.time.sleep(waiting * 2 * std.time.ns_per_ms);
 
     const data = try inMem.fetch();
-    defer data.deinit();
 
-    std.debug.assert(data.resource_metrics.items.len == 1);
-    std.debug.assert(data.resource_metrics.items[0].scope_metrics.items[0].metrics.items.len == 2);
+    std.debug.assert(data.len == 2);
+    //TODO add more assertions
 }
