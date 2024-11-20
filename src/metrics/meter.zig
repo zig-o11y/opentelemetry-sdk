@@ -345,7 +345,7 @@ test "meter provider adds multiple metric readers" {
     std.debug.assert(mp.readers.items.len == 2);
 }
 
-test "same metric reader cannot be registered with multiple providers" {
+test "metric reader cannot be registered with multiple providers" {
     const mp1 = try MeterProvider.init(std.testing.allocator);
     defer mp1.shutdown();
 
@@ -359,7 +359,7 @@ test "same metric reader cannot be registered with multiple providers" {
     try std.testing.expectError(spec.ResourceError.MetricReaderAlreadyAttached, err);
 }
 
-test "same metric reader cannot be registered twice on same meter provider" {
+test "metric reader cannot be registered twice on same meter provider" {
     const mp1 = try MeterProvider.init(std.testing.allocator);
     defer mp1.shutdown();
 
@@ -521,6 +521,8 @@ pub const AggregatedMetrics = struct {
     /// Fetch the aggreagted metric from the meter.
     /// Caller owns the returned memory and it should be freed using the AggregatedMetrics allocator.
     pub fn fetch(self: Self, meter: *Meter, aggregation: view.AggregationSelector) ![]MeterMeasurements {
+        @setCold(true);
+
         var result = try self.allocator.alloc(MeterMeasurements, meter.instruments.count());
         var iter = meter.instruments.valueIterator();
         var i: usize = 0;

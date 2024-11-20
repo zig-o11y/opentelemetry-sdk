@@ -4,6 +4,7 @@ const protobuf = @import("protobuf");
 const ManagedString = protobuf.ManagedString;
 const pbmetrics = @import("../opentelemetry/proto/metrics/v1.pb.zig");
 const pbcommon = @import("../opentelemetry/proto/common/v1.pb.zig");
+const spec = @import("spec.zig");
 
 const MeterProvider = @import("meter.zig").MeterProvider;
 const MetricReadError = @import("reader.zig").MetricReadError;
@@ -71,7 +72,7 @@ pub const MetricExporter = struct {
     }
 
     pub fn shutdown(self: *Self) void {
-        self.hasShutDown.store(true, .monotonic);
+        self.hasShutDown.store(true, .release);
         self.allocator.destroy(self);
     }
 };
@@ -83,7 +84,14 @@ pub fn noopExporter(_: *ExporterIface, _: []MeterMeasurements) MetricReadError!v
 }
 // mocked metric exporter to assert metrics data are read once exported.
 fn mockExporter(_: *ExporterIface, metrics: []MeterMeasurements) MetricReadError!void {
+    defer {
+        for (metrics) |m| {
+            m.deinit(std.testing.allocator);
+        }
+        std.testing.allocator.free(metrics);
+    }
     if (metrics.len != 1) {
+        std.debug.print("expectd just one metric, got {d}\n{any}\n", .{ metrics.len, metrics });
         return MetricReadError.ExportFailed;
     } // only one instrument from a single meter is expected in this mock
 }
@@ -242,39 +250,56 @@ pub const InMemoryExporter = struct {
 };
 
 test "in memory exporter stores data" {
-    var inMemExporter = try InMemoryExporter.init(std.testing.allocator);
+    const allocator = std.testing.allocator;
+
+    var inMemExporter = try InMemoryExporter.init(allocator);
     defer inMemExporter.deinit();
 
-    const exporter = try MetricExporter.new(std.testing.allocator, &inMemExporter.exporter);
+    const exporter = try MetricExporter.new(allocator, &inMemExporter.exporter);
     defer exporter.shutdown();
 
     const howMany: usize = 2;
 
     const val = @as(u64, 42);
-    const attrs = try Attributes.from(std.testing.allocator, .{ "key", val });
+    const attrs = try Attributes.from(allocator, .{ "key", val });
     defer std.testing.allocator.free(attrs.?);
 
-    var counterMeasure = [1]Measurement(i64){.{ .value = @as(i64, 1), .attributes = attrs }};
-    var histMeasure = [1]Measurement(f64){.{ .value = @as(f64, 2.0), .attributes = attrs }};
-    var underTest = [2]MeterMeasurements{
-        .{
-            .meterName = "first_meter",
-            .attributes = null,
-            .instrumentIdentifier = "counter-abc",
-            .data = .{ .int = &counterMeasure },
-        },
-        .{
-            .meterName = "another_meter",
-            .attributes = null,
-            .instrumentIdentifier = "histogram-def",
-            .data = .{ .double = &histMeasure },
-        },
-    };
+    var counterMeasure = try allocator.alloc(Measurement(i64), 1);
+    counterMeasure[0] = .{ .value = @as(i64, 1), .attributes = attrs };
+
+    var histMeasure = try allocator.alloc(Measurement(f64), 1);
+    histMeasure[0] = .{ .value = @as(f64, 2.0), .attributes = attrs };
+
+    var underTest = std.ArrayList(MeterMeasurements).init(allocator);
+
+    try underTest.append(MeterMeasurements{
+        .meterName = "first_meter",
+        .attributes = null,
+        .instrumentIdentifier = try spec.instrumentIdentifier(
+            allocator,
+            "counter-abc",
+            "counter",
+            "",
+            "",
+        ),
+        .data = .{ .int = counterMeasure },
+    });
+    try underTest.append(MeterMeasurements{
+        .meterName = "another_meter",
+        .attributes = null,
+        .instrumentIdentifier = try spec.instrumentIdentifier(
+            allocator,
+            "histogram-def",
+            "histogram",
+            "",
+            "",
+        ),
+        .data = .{ .double = histMeasure },
+    });
 
     // MetricReader.collect() does a copy of the metrics data,
     // then calls the exportBatch implementation passing it in.
-
-    const result = exporter.exportBatch(&underTest);
+    const result = exporter.exportBatch(try underTest.toOwnedSlice());
 
     std.debug.assert(result == .Success);
 
@@ -282,7 +307,7 @@ test "in memory exporter stores data" {
 
     std.debug.assert(data.len == howMany);
 
-    // std.debug.assert(entry.scope_metrics.items[0].metrics.items[0].data.?.sum.data_points.items.len == 2);
+    try std.testing.expectEqualDeep(counterMeasure[0], data[0].data.int[0]);
 
     // try std.testing.expectEqual(pbmetrics.Sum, @TypeOf(entry.scope_metrics.items[0].metrics.items[0].data.?.sum));
     // const sum: pbmetrics.Sum = entry.scope_metrics.items[0].metrics.items[0].data.?.sum;
@@ -326,18 +351,13 @@ pub const PeriodicExportingMetricReader = struct {
             .exportIntervalMillis = exportIntervalMs orelse defaultExportIntervalMillis,
             .exportTimeoutMillis = exportTimeoutMs orelse defaultExportTimeoutMillis,
         };
-        try s.start();
-        return s;
-    }
-
-    fn start(self: *Self) !void {
         const th = try std.Thread.spawn(
             .{},
             collectAndExport,
-            .{self},
+            .{ reader, s.shuttingDown, s.exportIntervalMillis, s.exportTimeoutMillis },
         );
         th.detach();
-        return;
+        return s;
     }
 
     pub fn shutdown(self: *Self) void {
@@ -348,19 +368,25 @@ pub const PeriodicExportingMetricReader = struct {
 
 // Function that collects metrics from the reader and exports it to the destination.
 // FIXME there is not a timeout for the collect operation.
-fn collectAndExport(periodicExp: *PeriodicExportingMetricReader) void {
+fn collectAndExport(
+    reader: *MetricReader,
+    shuttingDown: std.atomic.Value(bool),
+    exportIntervalMillis: u64,
+    // TODO: add a timeout for the export operation
+    _: u64,
+) void {
     // The execution should continue until the reader is shutting down
-    while (periodicExp.shuttingDown.load(.acquire) == false) {
-        if (periodicExp.reader.meterProvider) |_| {
+    while (shuttingDown.load(.acquire) == false) {
+        if (reader.meterProvider) |_| {
             // This will also call exporter.exportBatch() every interval.
-            periodicExp.reader.collect() catch |e| {
+            reader.collect() catch |e| {
                 std.debug.print("PeriodicExportingReader: reader collect failed: {?}\n", .{e});
             };
         } else {
-            std.debug.print("PeriodicExportingReader: no meter provider is registered with this MetricReader {any}\n", .{periodicExp.reader});
+            std.debug.print("PeriodicExportingReader: no meter provider is registered with this MetricReader {any}\n", .{reader});
         }
 
-        std.time.sleep(periodicExp.exportIntervalMillis * std.time.ns_per_ms);
+        std.time.sleep(exportIntervalMillis * std.time.ns_per_ms);
     }
 }
 
@@ -368,7 +394,7 @@ test "e2e periodic exporting metric reader" {
     const mp = try MeterProvider.init(std.testing.allocator);
     defer mp.shutdown();
 
-    const waiting: u64 = 10;
+    const waiting: u64 = 100;
 
     var inMem = try InMemoryExporter.init(std.testing.allocator);
     defer inMem.deinit();
@@ -379,6 +405,8 @@ test "e2e periodic exporting metric reader" {
     );
     defer reader.shutdown();
 
+    try mp.addReader(reader);
+
     var pemr = try PeriodicExportingMetricReader.init(
         std.testing.allocator,
         reader,
@@ -387,8 +415,6 @@ test "e2e periodic exporting metric reader" {
     );
     defer pemr.shutdown();
 
-    try mp.addReader(pemr.reader);
-
     var meter = try mp.getMeter(.{ .name = "test-reader" });
     var counter = try meter.createCounter(u64, .{
         .name = "requests",
@@ -396,7 +422,7 @@ test "e2e periodic exporting metric reader" {
     });
     try counter.add(10, .{});
 
-    var histogram = try meter.createHistogram(u64, .{
+    var histogram = try meter.createHistogram(f64, .{
         .name = "latency",
         .description = "a test histogram",
         .histogramOpts = .{ .explicitBuckets = &.{
@@ -405,12 +431,13 @@ test "e2e periodic exporting metric reader" {
             100.0,
         } },
     });
-    try histogram.record(10, .{});
+    try histogram.record(1.4, .{});
+    try histogram.record(10.4, .{});
 
     std.time.sleep(waiting * 2 * std.time.ns_per_ms);
 
     const data = try inMem.fetch();
 
-    std.debug.assert(data.len == 2);
+    try std.testing.expect(data.len == 2);
     //TODO add more assertions
 }

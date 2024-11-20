@@ -46,9 +46,8 @@ pub const MeterMeasurements = struct {
     instrumentIdentifier: []const u8,
     data: MeasurementsData,
 
-    pub fn deinit(self: *MeterMeasurements, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: MeterMeasurements, allocator: std.mem.Allocator) void {
         self.data.deinit(allocator);
         allocator.free(self.instrumentIdentifier);
-        allocator.destroy(self);
     }
 };
