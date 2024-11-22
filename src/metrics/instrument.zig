@@ -3,7 +3,7 @@ const std = @import("std");
 const spec = @import("spec.zig");
 const Attribute = @import("attributes.zig").Attribute;
 const Attributes = @import("attributes.zig").Attributes;
-const Measurement = @import("measurement.zig").Measurement;
+const Measurement = @import("measurement.zig").DataPoint;
 const MeasurementsData = @import("measurement.zig").MeasurementsData;
 
 pub const Kind = enum {

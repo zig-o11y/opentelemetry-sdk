@@ -12,9 +12,9 @@ const MeterProvider = @import("meter.zig").MeterProvider;
 const AggregatedMetrics = @import("meter.zig").AggregatedMetrics;
 const Attribute = @import("attributes.zig").Attribute;
 const Attributes = @import("attributes.zig").Attributes;
-const Measurement = @import("measurement.zig").Measurement;
+const Measurement = @import("measurement.zig").DataPoint;
 const MeasurementsData = @import("measurement.zig").MeasurementsData;
-const MeterMeasurements = @import("measurement.zig").MeterMeasurements;
+const MeterMeasurements = @import("measurement.zig").Measurements;
 
 const view = @import("view.zig");
 const TemporalitySelector = view.TemporalitySelector;
@@ -77,6 +77,7 @@ pub const MetricReader = struct {
             return;
         }
         var toBeExported = std.ArrayList(MeterMeasurements).init(self.allocator);
+        defer toBeExported.deinit();
 
         if (self.meterProvider) |mp| {
             // Collect the data from each meter provider.
@@ -265,13 +266,15 @@ test "metric reader collects data from meter provider" {
     defer mp.shutdown();
 
     var inMem = try InMemoryExporter.init(std.testing.allocator);
-    defer inMem.deinit();
 
     var reader = try MetricReader.init(
         std.testing.allocator,
         try MetricExporter.new(std.testing.allocator, &inMem.exporter),
     );
-    defer reader.shutdown();
+    defer {
+        reader.shutdown();
+        inMem.deinit();
+    }
 
     try mp.addReader(reader);
 
@@ -320,6 +323,13 @@ test "metric reader custom temporality" {
     try reader.collect();
 
     const data = try inMem.fetch();
+    defer {
+        for (data) |d| {
+            var me = d;
+            me.deinit(std.testing.allocator);
+        }
+        std.testing.allocator.free(data);
+    }
 
     std.debug.assert(data.len == 1);
 }

@@ -23,6 +23,7 @@ fn keyValue(comptime T: type) type {
     };
 }
 
+/// Represents a value that can be stored in an Attribute.
 pub const AttributeValue = union(enum) {
     bool: bool,
     string: []const u8,
@@ -89,6 +90,7 @@ pub const AttributeValue = union(enum) {
     }
 };
 
+/// Represents a key-value pair.
 pub const Attribute = struct {
     key: []const u8,
     value: AttributeValue,

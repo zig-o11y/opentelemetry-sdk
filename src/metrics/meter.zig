@@ -3,9 +3,9 @@ const std = @import("std");
 const spec = @import("spec.zig");
 const Attribute = @import("attributes.zig").Attribute;
 const Attributes = @import("attributes.zig").Attributes;
-const Measurement = @import("measurement.zig").Measurement;
+const Measurement = @import("measurement.zig").DataPoint;
 const MeasurementsData = @import("measurement.zig").MeasurementsData;
-const MeterMeasurements = @import("measurement.zig").MeterMeasurements;
+const Measurements = @import("measurement.zig").Measurements;
 
 const Instrument = @import("instrument.zig").Instrument;
 const Kind = @import("instrument.zig").Kind;
@@ -125,6 +125,8 @@ const Meter = struct {
     instruments: std.StringHashMap(*Instrument),
     allocator: std.mem.Allocator,
 
+    mx: std.Thread.Mutex = std.Thread.Mutex{},
+
     const Self = @This();
 
     /// Create a new Counter instrument using the specified type as the value type.
@@ -176,6 +178,9 @@ const Meter = struct {
     // Name is case-insensitive.
     // The remaining are also forming the identifier.
     fn registerInstrument(self: *Self, instrument: *Instrument) !void {
+        self.mx.lock();
+        defer self.mx.unlock();
+
         const id = try spec.instrumentIdentifier(
             self.allocator,
             instrument.opts.name,
@@ -444,7 +449,8 @@ pub const AggregatedMetrics = struct {
     }
 
     fn deduplicate(self: Self, instr: *Instrument, aggregation: view.Aggregation) !MeasurementsData {
-        // This function is only called on read/export.
+        // This function is only called on read/export
+        // which is much less frequent than other SDK operations.
         @setCold(true);
 
         const allMeasurements: MeasurementsData = try instr.getInstrumentsData(self.allocator);
@@ -453,6 +459,8 @@ pub const AggregatedMetrics = struct {
         switch (allMeasurements) {
             .int => {
                 var deduped = std.ArrayList(Measurement(i64)).init(self.allocator);
+                defer deduped.deinit();
+
                 var temp = std.HashMap(Attributes, i64, Attributes.HashContext, std.hash_map.default_max_load_percentage).init(self.allocator);
                 defer temp.deinit();
 
@@ -485,6 +493,8 @@ pub const AggregatedMetrics = struct {
             },
             .double => {
                 var deduped = std.ArrayList(Measurement(f64)).init(self.allocator);
+                defer deduped.deinit();
+
                 var temp = std.AutoHashMap(Attributes, f64).init(self.allocator);
                 defer temp.deinit();
 
@@ -510,7 +520,7 @@ pub const AggregatedMetrics = struct {
 
                 var iter = temp.iterator();
                 while (iter.next()) |entry| {
-                    // TODO add sharedAttributes to the measurements attributes.
+                    // TODO add sharedAttributes (the meter's attributes)to the measurements attributes.
                     try deduped.append(Measurement(f64){ .attributes = entry.key_ptr.*.attributes, .value = entry.value_ptr.* });
                 }
                 return .{ .double = try deduped.toOwnedSlice() };
@@ -518,26 +528,26 @@ pub const AggregatedMetrics = struct {
         }
     }
 
-    /// Fetch the aggreagted metric from the meter.
+    /// Fetch the aggreagted metrics from the meter.
+    /// Each instrument is an entry of the slice.
     /// Caller owns the returned memory and it should be freed using the AggregatedMetrics allocator.
-    pub fn fetch(self: Self, meter: *Meter, aggregation: view.AggregationSelector) ![]MeterMeasurements {
+    pub fn fetch(self: Self, meter: *Meter, aggregation: view.AggregationSelector) ![]Measurements {
         @setCold(true);
 
-        var result = try self.allocator.alloc(MeterMeasurements, meter.instruments.count());
+        meter.mx.lock();
+        defer meter.mx.unlock();
+
+        var result = try self.allocator.alloc(Measurements, meter.instruments.count());
         var iter = meter.instruments.valueIterator();
         var i: usize = 0;
+
         while (iter.next()) |instr| {
-            result[i] = MeterMeasurements{
+            result[i] = Measurements{
                 .meterName = self.meterName,
-                .schemaUrl = self.meterSchemaUrl,
-                .instrumentIdentifier = try spec.instrumentIdentifier(
-                    self.allocator,
-                    instr.*.opts.name,
-                    instr.*.kind.toString(),
-                    instr.*.opts.unit orelse "",
-                    instr.*.opts.description orelse "",
-                ),
-                .attributes = self.shareadAttributes,
+                .meterSchemaUrl = self.meterSchemaUrl,
+                .instrumentKind = instr.*.kind,
+                .instrumentOptions = instr.*.opts,
+                .meterAttributes = self.shareadAttributes,
                 .data = try self.deduplicate(instr.*, aggregation(instr.*.kind)),
             };
             i += 1;
@@ -598,4 +608,32 @@ test "aggregated metrics deduplicated from meter with attributes" {
         .attributes = attrs,
         .value = 4,
     }, deduped.int[0]);
+}
+
+test "aggregated metrics fetch to owned slice" {
+    const mp = try MeterProvider.init(std.testing.allocator);
+    defer mp.shutdown();
+
+    const meter = try mp.getMeter(.{ .name = "test", .schema_url = "http://example.com" });
+    var counter = try meter.createCounter(u64, .{ .name = "test-counter" });
+    try counter.add(1, .{});
+    try counter.add(3, .{});
+
+    const aggregated = try AggregatedMetrics.init(std.testing.allocator, meter);
+    defer aggregated.deinit();
+
+    const result = try aggregated.fetch(meter, view.DefaultAggregationFor);
+    defer {
+        for (result) |m| {
+            var data = m;
+            data.deinit(std.testing.allocator);
+        }
+        std.testing.allocator.free(result);
+    }
+
+    try std.testing.expectEqual(1, result.len);
+    try std.testing.expectEqualStrings(meter.name, result[0].meterName);
+    try std.testing.expectEqualStrings(meter.schema_url.?, result[0].meterSchemaUrl.?);
+    try std.testing.expectEqualStrings("test-counter", result[0].instrumentOptions.name);
+    try std.testing.expectEqual(4, result[0].data.int[0].value);
 }
