@@ -10,7 +10,7 @@ const MeterProvider = @import("meter.zig").MeterProvider;
 const MetricReadError = @import("reader.zig").MetricReadError;
 const MetricReader = @import("reader.zig").MetricReader;
 
-const Measurement = @import("measurement.zig").DataPoint;
+const DataPoint = @import("measurement.zig").DataPoint;
 const MeasurementsData = @import("measurement.zig").MeasurementsData;
 const Measurements = @import("measurement.zig").Measurements;
 
@@ -86,7 +86,8 @@ pub fn noopExporter(_: *ExporterIface, _: []Measurements) MetricReadError!void {
 fn mockExporter(_: *ExporterIface, metrics: []Measurements) MetricReadError!void {
     defer {
         for (metrics) |m| {
-            m.deinit(std.testing.allocator);
+            var d = m;
+            d.deinit(std.testing.allocator);
         }
         std.testing.allocator.free(metrics);
     }
@@ -108,8 +109,8 @@ test "metric exporter no-op" {
     var me = try MetricExporter.new(std.testing.allocator, &noop);
     defer me.shutdown();
 
-    var measure = [1]Measurement(i64){.{ .value = 42 }};
-    const measurement: []Measurement(i64) = measure[0..];
+    var measure = [1]DataPoint(i64){.{ .value = 42 }};
+    const measurement: []DataPoint(i64) = measure[0..];
     var metrics = [1]Measurements{Measurements{
         .meterName = "my-meter",
         .instrumentKind = .Counter,
@@ -121,41 +122,41 @@ test "metric exporter no-op" {
     try std.testing.expectEqual(ExportResult.Success, result);
 }
 
-// test "metric exporter is called by metric reader" {
-//     var mp = try MeterProvider.init(std.testing.allocator);
-//     defer mp.shutdown();
+test "metric exporter is called by metric reader" {
+    var mp = try MeterProvider.init(std.testing.allocator);
+    defer mp.shutdown();
 
-//     var mock = ExporterIface{ .exportFn = mockExporter };
+    var mock = ExporterIface{ .exportFn = mockExporter };
 
-//     var rdr = try MetricReader.init(
-//         std.testing.allocator,
-//         try MetricExporter.new(std.testing.allocator, &mock),
-//     );
-//     defer rdr.shutdown();
+    var rdr = try MetricReader.init(
+        std.testing.allocator,
+        try MetricExporter.new(std.testing.allocator, &mock),
+    );
+    defer rdr.shutdown();
 
-//     try mp.addReader(rdr);
+    try mp.addReader(rdr);
 
-//     const m = try mp.getMeter(.{ .name = "my-meter" });
+    const m = try mp.getMeter(.{ .name = "my-meter" });
 
-//     // only 1 metric should be in metrics data when we use the mock exporter
-//     var counter = try m.createCounter(u32, .{ .name = "my-counter" });
-//     try counter.add(1, .{});
+    // only 1 metric should be in metrics data when we use the mock exporter
+    var counter = try m.createCounter(u32, .{ .name = "my-counter" });
+    try counter.add(1, .{});
 
-//     try rdr.collect();
-// }
+    try rdr.collect();
+}
 
 test "metric exporter force flush succeeds" {
     var noop = ExporterIface{ .exportFn = noopExporter };
     var me = try MetricExporter.new(std.testing.allocator, &noop);
     defer me.shutdown();
 
-    var measure = [1]Measurement(i64){.{ .value = 42 }};
-    const measurement: []Measurement(i64) = measure[0..];
+    var measure = [1]DataPoint(i64){.{ .value = 42 }};
+    const dataPoints: []DataPoint(i64) = measure[0..];
     var metrics = [1]Measurements{Measurements{
         .meterName = "my-meter",
         .instrumentKind = .Counter,
         .instrumentOptions = .{ .name = "my-counter" },
-        .data = .{ .int = measurement },
+        .data = .{ .int = dataPoints },
     }};
 
     const result = me.exportBatch(&metrics);
@@ -173,13 +174,13 @@ test "metric exporter force flush fails" {
     var me = try MetricExporter.new(std.testing.allocator, &wait);
     defer me.shutdown();
 
-    var measure = [1]Measurement(i64){.{ .value = 42 }};
-    const measurement: []Measurement(i64) = measure[0..];
+    var measure = [1]DataPoint(i64){.{ .value = 42 }};
+    const dataPoints: []DataPoint(i64) = measure[0..];
     var metrics = [1]Measurements{Measurements{
         .meterName = "my-meter",
         .instrumentKind = .Counter,
         .instrumentOptions = .{ .name = "my-counter" },
-        .data = .{ .int = measurement },
+        .data = .{ .int = dataPoints },
     }};
 
     var bg = try std.Thread.spawn(
@@ -271,10 +272,10 @@ test "in memory exporter stores data" {
     const attrs = try Attributes.from(allocator, .{ "key", val });
     defer std.testing.allocator.free(attrs.?);
 
-    var counterMeasure = try allocator.alloc(Measurement(i64), 1);
+    var counterMeasure = try allocator.alloc(DataPoint(i64), 1);
     counterMeasure[0] = .{ .value = @as(i64, 1), .attributes = attrs };
 
-    var histMeasure = try allocator.alloc(Measurement(f64), 1);
+    var histMeasure = try allocator.alloc(DataPoint(f64), 1);
     histMeasure[0] = .{ .value = @as(f64, 2.0), .attributes = attrs };
 
     var underTest = std.ArrayList(Measurements).init(allocator);
@@ -387,54 +388,54 @@ fn collectAndExport(
     }
 }
 
-// test "e2e periodic exporting metric reader" {
-//     const mp = try MeterProvider.init(std.testing.allocator);
-//     defer mp.shutdown();
+test "e2e periodic exporting metric reader" {
+    const mp = try MeterProvider.init(std.testing.allocator);
+    defer mp.shutdown();
 
-//     const waiting: u64 = 100;
+    const waiting: u64 = 100;
 
-//     var inMem = try InMemoryExporter.init(std.testing.allocator);
-//     defer inMem.deinit();
+    var inMem = try InMemoryExporter.init(std.testing.allocator);
+    defer inMem.deinit();
 
-//     var reader = try MetricReader.init(
-//         std.testing.allocator,
-//         try MetricExporter.new(std.testing.allocator, &inMem.exporter),
-//     );
-//     defer reader.shutdown();
+    var reader = try MetricReader.init(
+        std.testing.allocator,
+        try MetricExporter.new(std.testing.allocator, &inMem.exporter),
+    );
+    defer reader.shutdown();
 
-//     try mp.addReader(reader);
+    try mp.addReader(reader);
 
-//     var pemr = try PeriodicExportingMetricReader.init(
-//         std.testing.allocator,
-//         reader,
-//         waiting,
-//         null,
-//     );
-//     defer pemr.shutdown();
+    var pemr = try PeriodicExportingMetricReader.init(
+        std.testing.allocator,
+        reader,
+        waiting,
+        null,
+    );
+    defer pemr.shutdown();
 
-//     var meter = try mp.getMeter(.{ .name = "test-reader" });
-//     var counter = try meter.createCounter(u64, .{
-//         .name = "requests",
-//         .description = "a test counter",
-//     });
-//     try counter.add(10, .{});
+    var meter = try mp.getMeter(.{ .name = "test-reader" });
+    var counter = try meter.createCounter(u64, .{
+        .name = "requests",
+        .description = "a test counter",
+    });
+    try counter.add(10, .{});
 
-//     var histogram = try meter.createHistogram(f64, .{
-//         .name = "latency",
-//         .description = "a test histogram",
-//         .histogramOpts = .{ .explicitBuckets = &.{
-//             1.0,
-//             10.0,
-//             100.0,
-//         } },
-//     });
-//     try histogram.record(1.4, .{});
-//     try histogram.record(10.4, .{});
+    var histogram = try meter.createHistogram(f64, .{
+        .name = "latency",
+        .description = "a test histogram",
+        .histogramOpts = .{ .explicitBuckets = &.{
+            1.0,
+            10.0,
+            100.0,
+        } },
+    });
+    try histogram.record(1.4, .{});
+    try histogram.record(10.4, .{});
 
-//     std.time.sleep(waiting * 2 * std.time.ns_per_ms);
+    std.time.sleep(waiting * 2 * std.time.ns_per_ms);
 
-//     const data = try inMem.fetch();
+    const data = try inMem.fetch();
 
-//     try std.testing.expect(data.len == 2);
-//     //TODO add more assertions
-// }
+    try std.testing.expect(data.len == 2);
+    //TODO add more assertions
+}

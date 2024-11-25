@@ -12,9 +12,9 @@ const MeterProvider = @import("meter.zig").MeterProvider;
 const AggregatedMetrics = @import("meter.zig").AggregatedMetrics;
 const Attribute = @import("attributes.zig").Attribute;
 const Attributes = @import("attributes.zig").Attributes;
-const Measurement = @import("measurement.zig").DataPoint;
+const DataPoint = @import("measurement.zig").DataPoint;
 const MeasurementsData = @import("measurement.zig").MeasurementsData;
-const MeterMeasurements = @import("measurement.zig").Measurements;
+const Measurements = @import("measurement.zig").Measurements;
 
 const view = @import("view.zig");
 const TemporalitySelector = view.TemporalitySelector;
@@ -76,7 +76,7 @@ pub const MetricReader = struct {
             // When shutdown has already been called, collect is a no-op.
             return;
         }
-        var toBeExported = std.ArrayList(MeterMeasurements).init(self.allocator);
+        var toBeExported = std.ArrayList(Measurements).init(self.allocator);
         defer toBeExported.deinit();
 
         if (self.meterProvider) |mp| {
@@ -85,10 +85,7 @@ pub const MetricReader = struct {
             //  MeasurementsData can be ported much more easilty to protobuf structs during export.
             var meters = mp.meters.valueIterator();
             while (meters.next()) |meter| {
-                const aggregate = try AggregatedMetrics.init(self.allocator, meter);
-                defer aggregate.deinit();
-
-                const measurements = try aggregate.fetch(meter, self.aggregation);
+                const measurements = try AggregatedMetrics.fetch(self.allocator, meter, self.aggregation);
                 try toBeExported.appendSlice(measurements);
             }
 
@@ -266,15 +263,13 @@ test "metric reader collects data from meter provider" {
     defer mp.shutdown();
 
     var inMem = try InMemoryExporter.init(std.testing.allocator);
+    defer inMem.deinit();
 
     var reader = try MetricReader.init(
         std.testing.allocator,
         try MetricExporter.new(std.testing.allocator, &inMem.exporter),
     );
-    defer {
-        reader.shutdown();
-        inMem.deinit();
-    }
+    defer reader.shutdown();
 
     try mp.addReader(reader);
 

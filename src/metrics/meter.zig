@@ -425,43 +425,20 @@ const view = @import("view.zig");
 /// AggregatedMetrics is a collection of metrics that have been aggregated using the
 /// MetricReader's temporality and aggregation functions.
 pub const AggregatedMetrics = struct {
-    const Self = @This();
-
-    meterName: []const u8,
-    meterSchemaUrl: ?[]const u8,
-    shareadAttributes: ?[]Attribute,
-
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator, m: *Meter) !*Self {
-        const s = try allocator.create(Self);
-        s.* = Self{
-            .meterName = m.name,
-            .meterSchemaUrl = m.schema_url,
-            .shareadAttributes = m.attributes,
-            .allocator = allocator,
-        };
-        return s;
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.allocator.destroy(self);
-    }
-
-    fn deduplicate(self: Self, instr: *Instrument, aggregation: view.Aggregation) !MeasurementsData {
+    fn deduplicate(allocator: std.mem.Allocator, instr: *Instrument, aggregation: view.Aggregation) !MeasurementsData {
         // This function is only called on read/export
         // which is much less frequent than other SDK operations.
         @setCold(true);
 
-        const allMeasurements: MeasurementsData = try instr.getInstrumentsData(self.allocator);
-        defer allMeasurements.deinit(self.allocator);
+        const allMeasurements: MeasurementsData = try instr.getInstrumentsData(allocator);
+        defer allMeasurements.deinit(allocator);
 
         switch (allMeasurements) {
             .int => {
-                var deduped = std.ArrayList(Measurement(i64)).init(self.allocator);
+                var deduped = std.ArrayList(Measurement(i64)).init(allocator);
                 defer deduped.deinit();
 
-                var temp = std.HashMap(Attributes, i64, Attributes.HashContext, std.hash_map.default_max_load_percentage).init(self.allocator);
+                var temp = std.HashMap(Attributes, i64, Attributes.HashContext, std.hash_map.default_max_load_percentage).init(allocator);
                 defer temp.deinit();
 
                 for (allMeasurements.int) |measure| {
@@ -492,10 +469,10 @@ pub const AggregatedMetrics = struct {
                 return .{ .int = try deduped.toOwnedSlice() };
             },
             .double => {
-                var deduped = std.ArrayList(Measurement(f64)).init(self.allocator);
+                var deduped = std.ArrayList(Measurement(f64)).init(allocator);
                 defer deduped.deinit();
 
-                var temp = std.AutoHashMap(Attributes, f64).init(self.allocator);
+                var temp = std.AutoHashMap(Attributes, f64).init(allocator);
                 defer temp.deinit();
 
                 for (allMeasurements.double) |measure| {
@@ -531,28 +508,29 @@ pub const AggregatedMetrics = struct {
     /// Fetch the aggreagted metrics from the meter.
     /// Each instrument is an entry of the slice.
     /// Caller owns the returned memory and it should be freed using the AggregatedMetrics allocator.
-    pub fn fetch(self: Self, meter: *Meter, aggregation: view.AggregationSelector) ![]Measurements {
+    pub fn fetch(allocator: std.mem.Allocator, meter: *Meter, aggregation: view.AggregationSelector) ![]Measurements {
         @setCold(true);
 
         meter.mx.lock();
         defer meter.mx.unlock();
 
-        var result = try self.allocator.alloc(Measurements, meter.instruments.count());
+        var result = try allocator.alloc(Measurements, meter.instruments.count());
+        defer allocator.free(result);
+
         var iter = meter.instruments.valueIterator();
         var i: usize = 0;
-
         while (iter.next()) |instr| {
             result[i] = Measurements{
-                .meterName = self.meterName,
-                .meterSchemaUrl = self.meterSchemaUrl,
+                .meterName = meter.name,
+                .meterSchemaUrl = meter.schema_url,
+                .meterAttributes = meter.attributes,
                 .instrumentKind = instr.*.kind,
                 .instrumentOptions = instr.*.opts,
-                .meterAttributes = self.shareadAttributes,
-                .data = try self.deduplicate(instr.*, aggregation(instr.*.kind)),
+                .data = try deduplicate(allocator, instr.*, aggregation(instr.*.kind)),
             };
             i += 1;
         }
-        return result;
+        return result[0..];
     }
 };
 
@@ -567,11 +545,7 @@ test "aggregated metrics deduplicated from meter without attributes" {
     var iter = meter.instruments.valueIterator();
     const instr = iter.next() orelse unreachable;
 
-    const aggregated = try AggregatedMetrics.init(std.testing.allocator, meter);
-    defer aggregated.deinit();
-
-    try std.testing.expectEqualStrings(meter.schema_url.?, aggregated.meterSchemaUrl.?);
-    var deduped = try aggregated.deduplicate(instr.*, .Sum);
+    const deduped = try AggregatedMetrics.deduplicate(std.testing.allocator, instr.*, .Sum);
     defer deduped.deinit(std.testing.allocator);
 
     try std.testing.expectEqualDeep(Measurement(i64){ .value = 4 }, deduped.int[0]);
@@ -595,10 +569,7 @@ test "aggregated metrics deduplicated from meter with attributes" {
     var iter = meter.instruments.valueIterator();
     const instr = iter.next() orelse unreachable;
 
-    const aggregated = try AggregatedMetrics.init(std.testing.allocator, meter);
-    defer aggregated.deinit();
-
-    var deduped = try aggregated.deduplicate(instr.*, .Sum);
+    var deduped = try AggregatedMetrics.deduplicate(std.testing.allocator, instr.*, .Sum);
     defer deduped.deinit(std.testing.allocator);
 
     const attrs = try Attributes.from(std.testing.allocator, .{ "key", val });
@@ -619,10 +590,7 @@ test "aggregated metrics fetch to owned slice" {
     try counter.add(1, .{});
     try counter.add(3, .{});
 
-    const aggregated = try AggregatedMetrics.init(std.testing.allocator, meter);
-    defer aggregated.deinit();
-
-    const result = try aggregated.fetch(meter, view.DefaultAggregationFor);
+    const result = try AggregatedMetrics.fetch(std.testing.allocator, meter, view.DefaultAggregationFor);
     defer {
         for (result) |m| {
             var data = m;
