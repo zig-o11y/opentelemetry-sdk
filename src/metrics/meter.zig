@@ -515,7 +515,6 @@ pub const AggregatedMetrics = struct {
         defer meter.mx.unlock();
 
         var result = try allocator.alloc(Measurements, meter.instruments.count());
-        defer allocator.free(result);
 
         var iter = meter.instruments.valueIterator();
         var i: usize = 0;
@@ -530,7 +529,7 @@ pub const AggregatedMetrics = struct {
             };
             i += 1;
         }
-        return result[0..];
+        return result;
     }
 };
 
