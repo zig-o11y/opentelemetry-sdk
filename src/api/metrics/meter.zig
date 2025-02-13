@@ -3,6 +3,10 @@ const std = @import("std");
 const spec = @import("spec.zig");
 const Attribute = @import("../../attributes.zig").Attribute;
 const Attributes = @import("../../attributes.zig").Attributes;
+const DataPoint = @import("measurement.zig").DataPoint;
+
+const MeasurementsData = @import("measurement.zig").MeasurementsData;
+const Measurements = @import("measurement.zig").Measurements;
 
 const Instrument = @import("instrument.zig").Instrument;
 const Kind = @import("instrument.zig").Kind;
@@ -122,12 +126,14 @@ const Meter = struct {
     instruments: std.StringHashMap(*Instrument),
     allocator: std.mem.Allocator,
 
+    mx: std.Thread.Mutex = std.Thread.Mutex{},
+
     const Self = @This();
 
     /// Create a new Counter instrument using the specified type as the value type.
     /// This is a monotonic counter that can only be incremented.
     pub fn createCounter(self: *Self, comptime T: type, options: InstrumentOptions) !*Counter(T) {
-        var i = try Instrument.Get(.Counter, options, self.allocator);
+        var i = try Instrument.new(.Counter, options, self.allocator);
         const c = try i.counter(T);
         errdefer self.allocator.destroy(c);
         try self.registerInstrument(i);
@@ -138,7 +144,7 @@ const Meter = struct {
     /// Create a new UpDownCounter instrument using the specified type as the value type.
     /// This is a counter that can be incremented and decremented.
     pub fn createUpDownCounter(self: *Self, comptime T: type, options: InstrumentOptions) !*Counter(T) {
-        var i = try Instrument.Get(.UpDownCounter, options, self.allocator);
+        var i = try Instrument.new(.UpDownCounter, options, self.allocator);
         const c = try i.upDownCounter(T);
         errdefer self.allocator.destroy(c);
         try self.registerInstrument(i);
@@ -149,7 +155,7 @@ const Meter = struct {
     /// Create a new Histogram instrument using the specified type as the value type.
     /// A histogram is a metric that samples observations and counts them in different buckets.
     pub fn createHistogram(self: *Self, comptime T: type, options: InstrumentOptions) !*Histogram(T) {
-        var i = try Instrument.Get(.Histogram, options, self.allocator);
+        var i = try Instrument.new(.Histogram, options, self.allocator);
         const h = try i.histogram(T);
         errdefer self.allocator.destroy(h);
         try self.registerInstrument(i);
@@ -161,7 +167,7 @@ const Meter = struct {
     /// A gauge is a metric that represents a single numerical value that can arbitrarily go up and down,
     /// and represents a point-in-time value.
     pub fn createGauge(self: *Self, comptime T: type, options: InstrumentOptions) !*Gauge(T) {
-        var i = try Instrument.Get(.Gauge, options, self.allocator);
+        var i = try Instrument.new(.Gauge, options, self.allocator);
         const g = try i.gauge(T);
         errdefer self.allocator.destroy(g);
         try self.registerInstrument(i);
@@ -173,6 +179,9 @@ const Meter = struct {
     // Name is case-insensitive.
     // The remaining are also forming the identifier.
     fn registerInstrument(self: *Self, instrument: *Instrument) !void {
+        self.mx.lock();
+        defer self.mx.unlock();
+
         const id = try spec.instrumentIdentifier(
             self.allocator,
             instrument.opts.name,
@@ -342,7 +351,7 @@ test "meter provider adds multiple metric readers" {
     std.debug.assert(mp.readers.items.len == 2);
 }
 
-test "same metric reader cannot be registered with multiple providers" {
+test "metric reader cannot be registered with multiple providers" {
     const mp1 = try MeterProvider.init(std.testing.allocator);
     defer mp1.shutdown();
 
@@ -356,7 +365,7 @@ test "same metric reader cannot be registered with multiple providers" {
     try std.testing.expectError(spec.ResourceError.MetricReaderAlreadyAttached, err);
 }
 
-test "same metric reader cannot be registered twice on same meter provider" {
+test "metric reader cannot be registered twice on same meter provider" {
     const mp1 = try MeterProvider.init(std.testing.allocator);
     defer mp1.shutdown();
 
@@ -410,4 +419,201 @@ test "meter provider with arena allocator" {
     const meVal: []const u8 = "test";
 
     try counter.add(1, .{ "author", meVal });
+}
+
+const view = @import("../../sdk/metrics/view.zig");
+
+/// AggregatedMetrics is a collection of metrics that have been aggregated using the
+/// MetricReader's temporality and aggregation functions.
+pub const AggregatedMetrics = struct {
+    fn deduplicate(allocator: std.mem.Allocator, instr: *Instrument, aggregation: view.Aggregation) !MeasurementsData {
+        // This function is only called on read/export
+        // which is much less frequent than other SDK operations (e.g. counter add).
+        // TODO: update to @branchHint in 0.14+
+        @setCold(true);
+
+        const allMeasurements: MeasurementsData = try instr.getInstrumentsData(allocator);
+        defer {
+            switch (allMeasurements) {
+                inline else => |list| allocator.free(list),
+            }
+        }
+
+        switch (allMeasurements) {
+            .int => {
+                var deduped = std.ArrayList(DataPoint(i64)).init(allocator);
+
+                var temp = std.HashMap(
+                    Attributes,
+                    i64,
+                    Attributes.HashContext,
+                    std.hash_map.default_max_load_percentage,
+                ).init(allocator);
+                defer temp.deinit();
+
+                // iterate over all measurements and deduplicate them by applying the aggregation function
+                // using the attributes as the key.
+                for (allMeasurements.int) |measure| {
+                    switch (aggregation) {
+                        .Drop => return MeasurementsData{ .int = &[_]DataPoint(i64){} },
+                        .Sum, .ExplicitBucketHistogram => {
+                            const key = Attributes.with(measure.attributes);
+                            const value = measure.value;
+                            if (temp.get(key)) |v| {
+                                const newValue = v + value;
+                                try temp.put(key, newValue);
+                            } else {
+                                try temp.put(key, value);
+                            }
+                        },
+                        .LastValue => {
+                            const key = Attributes.with(measure.attributes);
+                            try temp.put(key, measure.value);
+                        },
+                    }
+                }
+
+                var iter = temp.iterator();
+                while (iter.next()) |entry| {
+                    try deduped.append(DataPoint(i64){ .attributes = entry.key_ptr.*.attributes, .value = entry.value_ptr.* });
+                }
+                return .{ .int = try deduped.toOwnedSlice() };
+            },
+            .double => {
+                var deduped = std.ArrayList(DataPoint(f64)).init(allocator);
+
+                var temp = std.AutoHashMap(Attributes, f64).init(allocator);
+                defer temp.deinit();
+
+                for (allMeasurements.double) |measure| {
+                    switch (aggregation) {
+                        .Drop => return MeasurementsData{ .double = &[_]DataPoint(f64){} },
+                        .Sum, .ExplicitBucketHistogram => {
+                            const key = Attributes.with(measure.attributes);
+                            const value = measure.value;
+                            if (temp.get(key)) |v| {
+                                const newValue = v + value;
+                                try temp.put(key, newValue);
+                            } else {
+                                try temp.put(key, value);
+                            }
+                        },
+                        .LastValue => {
+                            const key = Attributes.with(measure.attributes);
+                            try temp.put(key, measure.value);
+                        },
+                    }
+                }
+
+                var iter = temp.iterator();
+                while (iter.next()) |entry| {
+                    try deduped.append(DataPoint(f64){ .attributes = entry.key_ptr.*.attributes, .value = entry.value_ptr.* });
+                }
+                return .{ .double = try deduped.toOwnedSlice() };
+            },
+        }
+    }
+
+    /// Fetch the aggreagted metrics from the meter.
+    /// Each instrument is an entry of the slice.
+    /// Caller owns the returned memory and it should be freed using the AggregatedMetrics allocator.
+    pub fn fetch(allocator: std.mem.Allocator, meter: *Meter, aggregation: view.AggregationSelector) ![]Measurements {
+        @setCold(true);
+
+        meter.mx.lock();
+        defer meter.mx.unlock();
+
+        var result = try allocator.alloc(Measurements, meter.instruments.count());
+
+        var iter = meter.instruments.valueIterator();
+        var i: usize = 0;
+        while (iter.next()) |instr| {
+            result[i] = Measurements{
+                .meterName = meter.name,
+                .meterSchemaUrl = meter.schema_url,
+                .meterAttributes = meter.attributes,
+                .instrumentKind = instr.*.kind,
+                .instrumentOptions = instr.*.opts,
+                .data = try deduplicate(allocator, instr.*, aggregation(instr.*.kind)),
+            };
+            i += 1;
+        }
+        return result;
+    }
+};
+
+test "aggregated metrics deduplicated from meter without attributes" {
+    const mp = try MeterProvider.init(std.testing.allocator);
+    defer mp.shutdown();
+    const meter = try mp.getMeter(.{ .name = "test", .schema_url = "http://example.com" });
+    var counter = try meter.createCounter(u64, .{ .name = "test-counter" });
+    try counter.add(1, .{});
+    try counter.add(3, .{});
+
+    var iter = meter.instruments.valueIterator();
+    const instr = iter.next() orelse unreachable;
+
+    const deduped = try AggregatedMetrics.deduplicate(std.testing.allocator, instr.*, .Sum);
+    defer switch (deduped) {
+        inline else => |m| std.testing.allocator.free(m),
+    };
+
+    try std.testing.expectEqualDeep(DataPoint(i64){ .value = 4 }, deduped.int[0]);
+}
+
+test "aggregated metrics deduplicated from meter with attributes" {
+    const mp = try MeterProvider.init(std.testing.allocator);
+    defer mp.shutdown();
+
+    const meterVal: []const u8 = "meter_val";
+    const meter = try mp.getMeter(.{
+        .name = "test",
+        .schema_url = "http://example.com",
+        .attributes = try Attributes.from(std.testing.allocator, .{ "meter_attr", meterVal }),
+    });
+    var counter = try meter.createCounter(u64, .{ .name = "test-counter" });
+    const val: []const u8 = "test";
+    try counter.add(1, .{ "key", val });
+    try counter.add(3, .{ "key", val });
+
+    var iter = meter.instruments.valueIterator();
+    const instr = iter.next() orelse unreachable;
+
+    const deduped = try AggregatedMetrics.deduplicate(std.testing.allocator, instr.*, .Sum);
+    defer switch (deduped) {
+        inline else => |m| std.testing.allocator.free(m),
+    };
+
+    const attrs = try Attributes.from(std.testing.allocator, .{ "key", val });
+    defer if (attrs) |a| std.testing.allocator.free(a);
+
+    try std.testing.expectEqualDeep(DataPoint(i64){
+        .attributes = attrs,
+        .value = 4,
+    }, deduped.int[0]);
+}
+
+test "aggregated metrics fetch to owned slice" {
+    const mp = try MeterProvider.init(std.testing.allocator);
+    defer mp.shutdown();
+
+    const meter = try mp.getMeter(.{ .name = "test", .schema_url = "http://example.com" });
+    var counter = try meter.createCounter(u64, .{ .name = "test-counter" });
+    try counter.add(1, .{});
+    try counter.add(3, .{});
+
+    const result = try AggregatedMetrics.fetch(std.testing.allocator, meter, view.DefaultAggregationFor);
+    defer {
+        for (result) |m| {
+            var data = m;
+            data.deinit(std.testing.allocator);
+        }
+        std.testing.allocator.free(result);
+    }
+
+    try std.testing.expectEqual(1, result.len);
+    try std.testing.expectEqualStrings(meter.name, result[0].meterName);
+    try std.testing.expectEqualStrings(meter.schema_url.?, result[0].meterSchemaUrl.?);
+    try std.testing.expectEqualStrings("test-counter", result[0].instrumentOptions.name);
+    try std.testing.expectEqual(4, result[0].data.int[0].value);
 }
