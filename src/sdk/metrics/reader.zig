@@ -22,9 +22,10 @@ const AggregationSelector = view.AggregationSelector;
 
 const exporter = @import("exporter.zig");
 const MetricExporter = exporter.MetricExporter;
-const ExporterIface = exporter.ExporterIface;
+const ExporterIface = exporter.ExporterImpl;
 const ExportResult = exporter.ExportResult;
-const InMemoryExporter = exporter.InMemoryExporter;
+
+const InMemoryExporter = @import("exporters/in_memory.zig").InMemoryExporter;
 
 /// ExportError represents the failure to export data points
 /// to a destination.
@@ -46,31 +47,26 @@ pub const MetricReader = struct {
     // stored in meterProvider.
     meterProvider: ?*MeterProvider = null,
 
-    temporality: TemporalitySelector = view.DefaultTemporalityFor,
-    aggregation: AggregationSelector = view.DefaultAggregationFor,
+    // Data transform configuration
+    temporality: TemporalitySelector = view.DefaultTemporality,
+    aggregation: AggregationSelector = view.DefaultAggregation,
+
     // Signal that shutdown has been called.
     hasShutDown: bool = false,
     mx: std.Thread.Mutex = std.Thread.Mutex{},
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, exporterImpl: *ExporterIface) !*Self {
+    pub fn init(allocator: std.mem.Allocator, metric_exporter: *MetricExporter) !*Self {
         const s = try allocator.create(Self);
         s.* = Self{
             .allocator = allocator,
-            .exporter = try MetricExporter.new(allocator, exporterImpl),
+            .exporter = metric_exporter,
+            .temporality = metric_exporter.temporality orelse view.DefaultTemporality,
+            .aggregation = metric_exporter.aggregation orelse view.DefaultAggregation,
         };
+
         return s;
-    }
-
-    pub fn withTemporality(self: *Self, temporality: *const fn (Kind) view.Temporality) *Self {
-        self.temporality = temporality;
-        return self;
-    }
-
-    pub fn withAggregation(self: *Self, aggregation: *const fn (Kind) view.Aggregation) *Self {
-        self.aggregation = aggregation;
-        return self;
     }
 
     pub fn collect(self: *Self) !void {
@@ -131,21 +127,26 @@ pub const MetricReader = struct {
 };
 
 test "metric reader shutdown prevents collect() to execute" {
-    var noop = exporter.ExporterIface{ .exportFn = exporter.noopExporter };
-    var reader = try MetricReader.init(std.testing.allocator, &noop);
-    const e = reader.collect();
+    var noop = exporter.ExporterImpl{ .exportFn = exporter.noopExporter };
+    const metric_exporter = try MetricExporter.new(std.testing.allocator, &noop);
+    var metric_reader = try MetricReader.init(std.testing.allocator, metric_exporter);
+    const e = metric_reader.collect();
     try std.testing.expectEqual(MetricReadError.CollectFailedOnMissingMeterProvider, e);
-    reader.shutdown();
+    metric_reader.shutdown();
 }
 
 test "metric reader collects data from meter provider" {
-    var mp = try MeterProvider.init(std.testing.allocator);
+    const allocator = std.testing.allocator;
+
+    var mp = try MeterProvider.init(allocator);
     defer mp.shutdown();
 
-    var inMem = try InMemoryExporter.init(std.testing.allocator);
+    var inMem = try InMemoryExporter.init(allocator);
     defer inMem.deinit();
 
-    var reader = try MetricReader.init(std.testing.allocator, &inMem.exporter);
+    const metric_exporter = try MetricExporter.new(allocator, &inMem.exporter);
+
+    var reader = try MetricReader.init(allocator, metric_exporter);
     defer reader.shutdown();
 
     try mp.addReader(reader);
@@ -165,24 +166,41 @@ test "metric reader collects data from meter provider" {
 
     try reader.collect();
 
-    _ = try inMem.fetch();
+    const data = try inMem.fetch(allocator);
+    defer {
+        for (data) |*d| {
+            d.*.deinit(allocator);
+        }
+        allocator.free(data);
+    }
 }
 
 fn deltaTemporality(_: Kind) view.Temporality {
-    return view.Temporality.Delta;
+    return .Delta;
 }
 
-test "metric reader custom temporality" {
-    var mp = try MeterProvider.init(std.testing.allocator);
+fn dropAll(_: Kind) view.Aggregation {
+    return .Drop;
+}
+
+test "metric reader custom temporality and aggregation" {
+    const allocator = std.testing.allocator;
+
+    var mp = try MeterProvider.init(allocator);
     defer mp.shutdown();
 
-    var inMem = try InMemoryExporter.init(std.testing.allocator);
+    var inMem = try InMemoryExporter.init(allocator);
     defer inMem.deinit();
 
-    var reader = try MetricReader.init(std.testing.allocator, &inMem.exporter);
-    reader = reader.withTemporality(deltaTemporality);
+    var metric_exporter = try MetricExporter.new(allocator, &inMem.exporter);
+    metric_exporter.temporality = deltaTemporality;
+    metric_exporter.aggregation = dropAll;
 
+    var reader = try MetricReader.init(allocator, metric_exporter);
     defer reader.shutdown();
+
+    std.debug.assert(reader.temporality(.Counter) == .Delta);
+    std.debug.assert(reader.aggregation(.Histogram) == .Drop);
 
     try mp.addReader(reader);
 
@@ -193,7 +211,13 @@ test "metric reader custom temporality" {
 
     try reader.collect();
 
-    const data = try inMem.fetch();
-
-    std.debug.assert(data.len == 1);
+    const data = try inMem.fetch(allocator);
+    defer {
+        for (data) |*d| {
+            d.*.deinit(allocator);
+        }
+        allocator.free(data);
+    }
+    // Since we are using the .Drop aggregation, no data should be collected.
+    try std.testing.expectEqual(0, data.len);
 }

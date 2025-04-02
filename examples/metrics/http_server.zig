@@ -33,7 +33,7 @@ pub fn main() !void {
 
     // Manually do the actions that would be done by the SDK
     try otel.metric_reader.collect();
-    const metrics = try otel.in_memory_exporter.fetch();
+    const metrics = try otel.in_memory_exporter.fetch(allocator);
     defer {
         for (metrics) |*m| {
             m.deinit(allocator);
@@ -103,11 +103,11 @@ fn setupTelemetry(allocator: std.mem.Allocator) !OTel {
     const mp = try sdk.MeterProvider.default();
     errdefer mp.shutdown();
 
-    var in_mem = try sdk.InMemoryExporter.init(allocator);
+    const me = try sdk.MetricExporter.InMemory(allocator, null, null);
+    var in_mem = me.in_memory;
     errdefer in_mem.deinit();
 
-    const mr = try sdk.MetricReader.init(allocator, &in_mem.exporter);
-
+    const mr = try sdk.MetricReader.init(allocator, me.exporter);
     try mp.addReader(mr);
 
     return .{
