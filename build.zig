@@ -5,6 +5,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Optional filter argument to selectively run benchmarks
+    const benchmark_filter = b.option([]const u8, "benchmark-filter", "Run only benchmarks matching this filter");
+
     // Dependencies section
     // Benchmarks lib
     const benchmarks_dep = b.dependency("zbench", .{
@@ -96,7 +99,13 @@ pub fn build(b: *std.Build) void {
 
     const benchmark_mod = benchmarks_dep.module("zbench");
 
-    const metrics_benchmarks = buildBenchmarks(b, "benchmarks/metrics", sdk_lib.root_module, benchmark_mod) catch |err| {
+    const metrics_benchmarks = buildBenchmarks(
+        b,
+        "benchmarks/metrics",
+        sdk_lib.root_module,
+        benchmark_mod,
+        benchmark_filter,
+    ) catch |err| {
         std.debug.print("Error building metrics benchmarks: {}\n", .{err});
         return;
     };
@@ -143,6 +152,7 @@ fn buildBenchmarks(
     base_dir: []const u8,
     otel_mod: *std.Build.Module,
     benchmark_mod: *std.Build.Module,
+    benchmark_filter: ?[]const u8,
 ) ![]*std.Build.Step.Compile {
     var bench_tests = std.ArrayList(*std.Build.Step.Compile).init(b.allocator);
     errdefer bench_tests.deinit();
@@ -159,6 +169,14 @@ fn buildBenchmarks(
         if (!std.mem.eql(u8, file.name[index + 1 ..], "zig")) continue;
 
         const name = file.name[0..index];
+
+        // Apply benchmark filter if provided
+        if (benchmark_filter) |filter| {
+            if (!std.mem.containsAtLeast(u8, name, 1, filter)) {
+                continue;
+            }
+        }
+
         const benchmark = b.addTest(.{
             .name = name,
             .root_source_file = b.path(try std.fs.path.join(b.allocator, &.{ base_dir, file.name })),
@@ -170,8 +188,16 @@ fn buildBenchmarks(
         benchmark.root_module.addImport("opentelemetry-sdk", otel_mod);
         benchmark.root_module.addImport("benchmark", benchmark_mod);
 
+        const run_step = b.addRunArtifact(benchmark);
+
+        // Forward the filter to the test runner
+        if (benchmark_filter) |filter| {
+            run_step.addArgs(&.{ "--filter", filter });
+        }
+        try bench_runs.append(run_step);
         try bench_tests.append(benchmark);
     }
-
+    
+    return bench_runs.toOwnedSlice();
     return bench_tests.toOwnedSlice();
 }
