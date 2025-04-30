@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Optional filter argument to selectively run benchmarks
+    // Optional benchmark filter
     const benchmark_filter = b.option([]const u8, "benchmark-filter", "Run only benchmarks matching this filter");
 
     // Dependencies section
@@ -110,9 +110,8 @@ pub fn build(b: *std.Build) void {
         return;
     };
     defer b.allocator.free(metrics_benchmarks);
-    for (metrics_benchmarks) |step| {
-        const run_metrics_benchmark = b.addRunArtifact(step);
-        benchmarks_step.dependOn(&run_metrics_benchmark.step);
+    for (metrics_benchmarks) |run_step| {
+        benchmarks_step.dependOn(&run_step.step);
     }
 }
 
@@ -153,9 +152,9 @@ fn buildBenchmarks(
     otel_mod: *std.Build.Module,
     benchmark_mod: *std.Build.Module,
     benchmark_filter: ?[]const u8,
-) ![]*std.Build.Step.Compile {
-    var bench_tests = std.ArrayList(*std.Build.Step.Compile).init(b.allocator);
-    errdefer bench_tests.deinit();
+) ![]*std.Build.Step.Run {
+    var bench_runs = std.ArrayList(*std.Build.Step.Run).init(b.allocator);
+    errdefer bench_runs.deinit();
 
     var test_dir = try std.fs.cwd().openDir(base_dir, .{ .iterate = true });
     defer test_dir.close();
@@ -170,7 +169,6 @@ fn buildBenchmarks(
 
         const name = file.name[0..index];
 
-        // Apply benchmark filter if provided
         if (benchmark_filter) |filter| {
             if (!std.mem.containsAtLeast(u8, name, 1, filter)) {
                 continue;
@@ -190,14 +188,12 @@ fn buildBenchmarks(
 
         const run_step = b.addRunArtifact(benchmark);
 
-        // Forward the filter to the test runner
         if (benchmark_filter) |filter| {
             run_step.addArgs(&.{ "--filter", filter });
         }
+
         try bench_runs.append(run_step);
-        try bench_tests.append(benchmark);
     }
-    
+
     return bench_runs.toOwnedSlice();
-    return bench_tests.toOwnedSlice();
 }
