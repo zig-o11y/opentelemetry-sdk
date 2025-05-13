@@ -556,6 +556,7 @@ pub const AggregatedMetrics = struct {
             if (aggregated_data) |agg| {
                 try results.append(Measurements{
                     .meterName = meter.name,
+                    .meterVersion = meter.version,
                     .meterSchemaUrl = meter.schema_url,
                     .meterAttributes = meter.attributes,
                     .instrumentKind = instr.*.kind,

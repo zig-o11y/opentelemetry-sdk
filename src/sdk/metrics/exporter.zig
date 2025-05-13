@@ -13,6 +13,9 @@ const Attributes = @import("../../attributes.zig").Attributes;
 const InMemoryExporter = @import("./exporters/in_memory.zig").InMemoryExporter;
 const StdoutExporter = @import("./exporters/stdout.zig").StdoutExporter;
 
+const otlp = @import("exporters/otlp.zig");
+const OTLPExporter = @import("./exporters/otlp.zig").OTLPExporter;
+
 const view = @import("view.zig");
 
 pub const ExportResult = enum {
@@ -88,6 +91,23 @@ pub const MetricExporter = struct {
         exporter.aggregation = aggregation orelse view.DefaultAggregation;
 
         return .{ .exporter = exporter, .stdout = stdout };
+    }
+
+    pub fn OTLP(
+        allocator: std.mem.Allocator,
+        temporality: ?view.TemporalitySelector,
+        aggregation: ?view.AggregationSelector,
+        options: *otlp.ConfigOptions,
+    ) !struct { exporter: *MetricExporter, otlp: *OTLPExporter } {
+        const temporality_ = temporality orelse view.DefaultTemporality;
+
+        const otlp_exporter = try OTLPExporter.init(allocator, options, temporality_);
+        const exporter = try MetricExporter.new(allocator, &otlp_exporter.exporter);
+        // Default configuration
+        exporter.temporality = temporality_;
+        exporter.aggregation = aggregation orelse view.DefaultAggregation;
+
+        return .{ .exporter = exporter, .otlp = otlp_exporter };
     }
 
     /// ExportBatch exports a batch of metrics data by calling the exporter implementation.
@@ -171,6 +191,7 @@ test "metric exporter no-op" {
     const measurement: []DataPoint(i64) = measure[0..];
     var metrics = [1]Measurements{.{
         .meterName = "my-meter",
+        .meterVersion = "1.0",
         .instrumentKind = .Counter,
         .instrumentOptions = .{ .name = "my-counter" },
         .data = .{ .int = measurement },
@@ -211,6 +232,7 @@ test "metric exporter force flush succeeds" {
     const dataPoints: []DataPoint(i64) = measure[0..];
     var metrics = [1]Measurements{Measurements{
         .meterName = "my-meter",
+        .meterVersion = "1.0",
         .instrumentKind = .Counter,
         .instrumentOptions = .{ .name = "my-counter" },
         .data = .{ .int = dataPoints },
@@ -235,6 +257,7 @@ test "metric exporter force flush fails" {
     const dataPoints: []DataPoint(i64) = measure[0..];
     var metrics = [1]Measurements{Measurements{
         .meterName = "my-meter",
+        .meterVersion = "1.0",
         .instrumentKind = .Counter,
         .instrumentOptions = .{ .name = "my-counter" },
         .data = .{ .int = dataPoints },
