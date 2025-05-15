@@ -4,6 +4,16 @@ const std = @import("std");
 const http = std.http;
 const Uri = std.Uri;
 
+const pbmetrics = @import("opentelemetry/proto/metrics/v1.pb.zig");
+const pblogs = @import("opentelemetry/proto/logs/v1.pb.zig");
+const pbtrace = @import("opentelemetry/proto/trace/v1.pb.zig");
+
+const pbcollector_metrics = @import("opentelemetry/proto/collector/metrics/v1.pb.zig");
+const pbcollector_trace = @import("opentelemetry/proto/collector/trace/v1.pb.zig");
+const pbcollector_logs = @import("opentelemetry/proto/collector/logs/v1.pb.zig");
+
+// Fixed user-agent string for the OTLP transport.
+// TODO: find a way to make the version dynamic.
 const UserAgent = "zig-o11y_opentelemetry-sdk/0.1.0";
 
 /// Errors that can occur during the configuration of the OTLP transport.
@@ -22,7 +32,9 @@ pub const ConfigError = error{
 
 /// Error set for the OTLP Export operation.
 pub const ExportError = error{
+    RequestEnqueuedForRetry,
     UnimplementedTransportProtocol,
+    NonRetryableStatusCodeInResponse,
 };
 
 /// The combination of underlying transport protocol and format used to send the data.
@@ -92,11 +104,11 @@ pub const Signal = enum {
 
     /// Actual signal data as protobuf messages.
     pub const Data = union(Self) {
-        metrics: pbmetrics.MetricsData,
-        logs: pblogs.LogsData,
-        traces: pbtrace.TracesData,
+        metrics: pbcollector_metrics.ExportMetricsServiceRequest,
+        logs: pbcollector_logs.ExportLogsServiceRequest,
+        traces: pbcollector_trace.ExportTraceServiceRequest,
         // TODO add other signals when implemented
-        // profiles: profiles.ProfilesData,
+        // profiles: profiles.ExportProfilesServiceRequest,
 
         fn toOwnedSlice(self: Data, allocator: std.mem.Allocator, protocol: Protocol) ![]const u8 {
             return switch (protocol) {
@@ -124,7 +136,7 @@ pub const Signal = enum {
 test "otlp Signal.Data get payload bytes" {
     const allocator = std.testing.allocator;
     var data = Signal.Data{
-        .metrics = pbmetrics.MetricsData{
+        .metrics = pbcollector_metrics.ExportMetricsServiceRequest{
             .resource_metrics = std.ArrayList(pbmetrics.ResourceMetrics).init(allocator),
         },
     };
@@ -139,7 +151,7 @@ pub const ConfigOptions = struct {
     allocator: std.mem.Allocator,
 
     /// The endpoint to send the data to.
-    /// Must be in the form of "host:port".
+    /// Must be in the form of "host:port", withouth scheme.
     endpoint: []const u8 = "localhost:4317",
 
     /// Only applicable to HTTP based transports.
@@ -168,6 +180,8 @@ pub const ConfigOptions = struct {
     // They should be populated by the user, but they can also be filled in
     // when parsing the config from environment variables.
     custom_signal_urls: std.AutoHashMap(Signal, []const u8),
+
+    retryConfig: ExpBackoffconfig = .{},
 
     pub fn init(allocator: std.mem.Allocator) !*ConfigOptions {
         const s = try allocator.create(ConfigOptions);
@@ -335,7 +349,15 @@ test "otlp config validation" {
     cfg3.deinit();
 }
 
-// Creates the connection and handles the data transfer for an HTTP-based connection.
+// Configures the behavior of the Exponential Backoff Retry strategy.
+// The default values are not dictated by the OTLP spec.
+pub const ExpBackoffconfig = struct {
+    max_retries: u32 = 20,
+    base_delay_ms: u64 = 100,
+    max_delay_ms: u64 = 60000,
+};
+
+/// Handles the data transfer for HTTP-based OTLP.
 const HTTPClient = struct {
     const Self = @This();
 
@@ -345,7 +367,7 @@ const HTTPClient = struct {
     client: http.Client,
     // Retries are processed using a separate thread.
     // A priority queue is maintained in the ExpBackoffRetry struct.
-    retry: *ExpBackoffRetry,
+    // retry: *ExpBackoffRetry,
 
     pub fn init(allocator: std.mem.Allocator, config: *ConfigOptions) !*Self {
         try config.validate();
@@ -356,17 +378,14 @@ const HTTPClient = struct {
             .allocator = allocator,
             .config = config,
             .client = http.Client{ .allocator = allocator },
-            .retry = undefined,
+            // .retry = try ExpBackoffRetry.init(allocator, config.retryConfig),
         };
-
-        const retry = try ExpBackoffRetry.init(allocator, &s.client, .{});
-        s.retry = retry;
 
         return s;
     }
 
     pub fn deinit(self: *Self) void {
-        self.retry.deinit();
+        self.client.deinit();
         self.allocator.destroy(self);
     }
 
@@ -423,25 +442,101 @@ const HTTPClient = struct {
             // We always send a POST request to write OTLP data.
             .method = .POST,
             .headers = req_opts.headers,
-            .extra_headers = req_opts.extra_headers,
+            .extra_headers = if (req_opts.extra_headers.len > 0) req_opts.extra_headers else &.{},
             .payload = req_body,
         };
+
         const response = try self.client.fetch(fetch_request);
 
         switch (response.status) {
+            // TODO: handle partial success.
+            // See https://opentelemetry.io/docs/specs/otlp/#partial-success-1
             .ok, .accepted => return,
             // We must handle retries for a subset of status codes.
             // See https://opentelemetry.io/docs/specs/otlp/#otlphttp-response
             .too_many_requests, .bad_gateway, .service_unavailable, .gateway_timeout => {
-                try self.retry.enqueue(fetch_request, 0);
+                // try self.retry.enqueue(fetch_request, 0);
+                const cloned_req = try cloneFetchOptions(self.allocator, fetch_request);
+                const t = try std.Thread.spawn(.{}, retryRequest, .{
+                    self.allocator,
+                    self.config.retryConfig,
+                    cloned_req,
+                });
+                t.detach();
+
+                return ExportError.RequestEnqueuedForRetry;
             },
             else => {
                 // Do not retry and report the status code and the message.
-                // TODO implement error handling
+                // TODO implement error handling, parsing Status message.
+                return ExportError.NonRetryableStatusCodeInResponse;
             },
         }
     }
+
+    fn retryRequest(allocator: std.mem.Allocator, retry_config: ExpBackoffconfig, req_opts: http.Client.FetchOptions) void {
+        defer freeFetchOptions(allocator, req_opts);
+
+        var retry_count: u32 = 0;
+        while (retry_count < retry_config.max_retries) {
+            var client = http.Client{ .allocator = allocator };
+            defer client.deinit();
+
+            defer retry_count += 1;
+            const response = client.fetch(req_opts) catch |err| {
+                std.debug.print("OTLP transport (retry): error connecting to server: {}\n", .{err});
+                continue;
+            };
+            switch (response.status) {
+                .ok, .accepted => {
+                    return;
+                },
+                .too_many_requests, .bad_gateway, .service_unavailable, .gateway_timeout => {
+                    std.Thread.sleep(std.time.ns_per_ms * calculateDelayMillisec(
+                        retry_config.base_delay_ms,
+                        retry_config.max_delay_ms,
+                        retry_count,
+                    ));
+                    continue;
+                },
+                else => |status| {
+                    std.debug.print("OTLP transport (retry): request failed with status code: {}\n", .{status});
+                    return;
+                },
+            }
+        }
+    }
+
+    fn cloneFetchOptions(allocator: std.mem.Allocator, opts: http.Client.FetchOptions) !http.Client.FetchOptions {
+        var cloned = opts;
+        cloned.location = .{ .url = try allocator.dupe(u8, opts.location.url) };
+        if (opts.payload) |payload| {
+            cloned.payload = try allocator.dupe(u8, payload);
+        }
+        cloned.extra_headers = try allocator.dupe(http.Header, opts.extra_headers);
+
+        return cloned;
+    }
+
+    fn freeFetchOptions(allocator: std.mem.Allocator, req: http.Client.FetchOptions) void {
+        allocator.free(req.location.url);
+        if (req.payload) |payload| {
+            allocator.free(payload);
+        }
+        allocator.free(req.extra_headers);
+    }
 };
+
+fn calculateDelayMillisec(base_delay_ms: u64, max_delay_ms: u64, attempt: u32) u64 {
+    // Exponential backoff with jitter: delay = min(max_delay, base * 2^attempt) + random(0, 10%)
+    const delay: u64 = @min(
+        max_delay_ms,
+        base_delay_ms * std.math.pow(u64, 2, attempt),
+    );
+    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+    const jitter = prng.random().intRangeAtMost(u64, 0, @intCast(@divTrunc(delay, 10)));
+    return delay + jitter;
+}
 
 fn parseHeaders(key_values: []const u8) ConfigError![]std.http.Header {
     // Maximum 64 items are allowd in the W3C baggage
@@ -504,194 +599,22 @@ test "otlp config parse headers" {
     try std.testing.expectError(ConfigError.InvalidHeadersTooManyItems, parseHeaders(invalid_too_many_items));
 }
 
-// Implements the Exponential Backoff Retry strategy for HTTP requests.
-// The default configuration values are not dictated by the OTLP spec.
-// We choose toset a maxumum number of retries, even if not specified in the spec,
-// to avoid infinite loops in case of a un-responsive server.
-const ExpBackoffRetry = struct {
-    const Self = @This();
-
-    allocator: std.mem.Allocator,
-    client: *http.Client,
-
-    max_retries: u32,
-    base_delay_ms: u64,
-    max_delay_ms: u64,
-
-    queue: std.PriorityQueue(FetchRequest, void, compareFetchRequest),
-    thread: ?std.Thread,
-    mutex: std.Thread.Mutex,
-    condition: std.Thread.Condition,
-    running: std.atomic.Value(bool),
-
-    // Wrapper for FetchOptions with retry metadata
-    const FetchRequest = struct {
-        options: http.Client.FetchOptions,
-        attempts_counter: u32,
-        next_attempt_time_ms: i64, // Timestamp (ms) for next retry
+test "otlp exp backoff delay calculation" {
+    const config = ExpBackoffconfig{
+        .max_retries = 10,
+        .base_delay_ms = 5,
+        .max_delay_ms = 30000,
     };
 
-    // Compare function for PriorityQueue (earlier next_attempt first)
-    fn compareFetchRequest(_: void, a: FetchRequest, b: FetchRequest) std.math.Order {
-        return std.math.order(a.next_attempt_time_ms, b.next_attempt_time_ms);
-    }
+    const first_backoff = calculateDelayMillisec(config.base_delay_ms, config.max_delay_ms, 1);
+    const second_backoff = calculateDelayMillisec(config.base_delay_ms, config.max_delay_ms, 2);
 
-    fn init(allocator: std.mem.Allocator, client: *http.Client, config: struct {
-        max_retries: u32 = 50,
-        base_delay_ms: u64 = 100,
-        max_delay_ms: u64 = 60000,
-    }) !*Self {
-        const s = try allocator.create(Self);
-        s.* = Self{
-            .allocator = allocator,
-            .client = client,
-            .max_retries = config.max_retries,
-            .base_delay_ms = config.base_delay_ms,
-            .max_delay_ms = config.max_delay_ms,
-            .queue = std.PriorityQueue(FetchRequest, void, compareFetchRequest).init(allocator, {}),
-            .mutex = std.Thread.Mutex{},
-            .thread = null,
-            .condition = std.Thread.Condition{},
-            .running = std.atomic.Value(bool).init(true),
-        };
+    try std.testing.expect(first_backoff >= 10 and first_backoff <= 12);
+    try std.testing.expect(second_backoff >= 20 and second_backoff <= 23);
 
-        // Start the background thread
-        s.thread = try std.Thread.spawn(.{}, retryLoop, .{s});
-        return s;
-    }
-
-    fn deinit(self: *Self) void {
-        // Signal the thread to stop
-        self.running.store(false, .release);
-        // Wake the thread if it's waiting
-        self.condition.signal();
-
-        // Wait for the thread to finish
-        if (self.thread) |t| {
-            t.join();
-        }
-
-        // Clean up queue
-        self.mutex.lock();
-        while (self.queue.removeOrNull()) |req| {
-            self.freeFetchRequest(&req);
-        }
-        self.queue.deinit();
-        self.mutex.unlock();
-
-        self.allocator.destroy(self);
-    }
-
-    fn enqueue(self: *Self, options: http.Client.FetchOptions, attempt: u32) !void {
-        const req = FetchRequest{
-            .options = try self.cloneFetchOptions(options),
-            .attempts_counter = attempt,
-            .next_attempt_time_ms = std.time.milliTimestamp() + calculateDelay(self.base_delay_ms, self.max_delay_ms, attempt),
-        };
-
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        try self.queue.add(req);
-        self.condition.signal();
-    }
-
-    fn retryLoop(self: *Self) void {
-        while (self.running.load(.acquire)) {
-            var req: FetchRequest = undefined;
-            // We use this boolean to avoid a data race.
-            var has_request: bool = false;
-
-            {
-                // Block that acquires the lock and waits for the first request in the queue to be ready.
-                self.mutex.lock();
-                // We release the lock at the end of the block.
-                defer self.mutex.unlock();
-
-                if (self.queue.peek()) |peeked_req| {
-                    const now = std.time.milliTimestamp();
-                    if (now < peeked_req.next_attempt_time_ms) {
-                        // Wait until the next attempt time or a new item
-                        const wait_ns: u64 = @intCast((peeked_req.next_attempt_time_ms - now) * std.time.ns_per_ms);
-                        self.condition.timedWait(&self.mutex, wait_ns) catch continue;
-                    } else {
-                        // Copy the request and remove it from the queue, avoiding the data race that would be caused by
-                        // modifying the queue while the thread is running.
-                        req = peeked_req;
-                        _ = self.queue.remove();
-                        has_request = true;
-                    }
-                } else {
-                    // Queue is empty, wait for a signal
-                    self.condition.wait(&self.mutex);
-                    continue;
-                }
-            }
-
-            if (!has_request) continue;
-            defer self.freeFetchRequest(&req);
-
-            // Attempt the request
-            const response = self.client.fetch(req.options) catch |err| {
-                std.debug.print("OTLP transport: error connecting to server: {}\n", .{err});
-                if (req.attempts_counter < self.max_retries) {
-                    self.enqueue(req.options, req.attempts_counter + 1) catch |e| {
-                        std.debug.print("OTLP transport: failed to re-queue: {}\n", .{e});
-                    };
-                }
-                continue;
-            };
-
-            // Check response status
-            switch (response.status) {
-                .ok, .accepted => {
-                    // Success, go on (the request is cleaned up in the loop)
-                },
-                .too_many_requests, .bad_gateway, .service_unavailable, .gateway_timeout => {
-                    // Retry if we have attempts left
-                    if (req.attempts_counter < self.max_retries) {
-                        self.enqueue(req.options, req.attempts_counter + 1) catch |e| {
-                            std.debug.print("OTLP transport: failed to re-queue: {}\n", .{e});
-                        };
-                    }
-                },
-                else => |s| {
-                    // Non-retryable error should be logged
-                    std.debug.print("OTLP transport: exp backoff response has a non-retryable status: {s}\n", .{@tagName(s)});
-                },
-            }
-        }
-    }
-
-    fn calculateDelay(base_delay_ms: u64, max_delay_ms: u64, attempt: u32) i64 {
-        // Exponential backoff with jitter: delay = min(max_delay, base * 2^attempt) + random(0, 10%)
-        const delay: i64 = @intCast(@min(
-            max_delay_ms,
-            base_delay_ms * std.math.pow(u64, 2, attempt),
-        ));
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
-        const jitter = prng.random().intRangeAtMost(i64, 0, @intCast(@divTrunc(delay, 10)));
-        return delay + jitter;
-    }
-
-    fn cloneFetchOptions(self: *Self, opts: http.Client.FetchOptions) !http.Client.FetchOptions {
-        var cloned = opts;
-        cloned.location = .{ .url = try self.allocator.dupe(u8, opts.location.url) };
-        if (opts.payload) |payload| {
-            cloned.payload = try self.allocator.dupe(u8, payload);
-        }
-        cloned.extra_headers = try self.allocator.dupe(http.Header, opts.extra_headers);
-
-        return cloned;
-    }
-
-    fn freeFetchRequest(self: *Self, req: *const FetchRequest) void {
-        self.allocator.free(req.options.location.url);
-        if (req.options.payload) |payload| {
-            self.allocator.free(payload);
-        }
-        self.allocator.free(req.options.extra_headers);
-    }
-};
+    try std.testing.expect(second_backoff > first_backoff);
+    try std.testing.expect(second_backoff < config.max_delay_ms);
+}
 
 // This test is here to allow compiling all the code paths of ExpBackoffRetry struct.
 // In itself, it does not provide much value other than ensuring that the code compiles,
@@ -712,21 +635,20 @@ test "otlp HTTPClient send fails for missing server" {
     try std.testing.expectError(std.posix.ConnectError.ConnectionRefused, result);
 }
 
-const pbmetrics = @import("opentelemetry/proto/metrics/v1.pb.zig");
-const pblogs = @import("opentelemetry/proto/logs/v1.pb.zig");
-const pbtrace = @import("opentelemetry/proto/trace/v1.pb.zig");
-
 /// Export the data to the OTLP endpoint using the options configured with ConfigOptions.
 pub fn Export(
     allocator: std.mem.Allocator,
     config: *ConfigOptions,
     otlp_payload: Signal.Data,
 ) !void {
+    // FIXME better polymorphism here.
     // Determine the type of client to be used, currently only HTTP is supported.
     const client = switch (config.protocol) {
         .http_json, .http_protobuf => try HTTPClient.init(allocator, config),
         .grpc => return ExportError.UnimplementedTransportProtocol,
     };
+    // the `deinit()` method MUST be implemented by all clients.
+    defer client.deinit();
 
     const payload = otlp_payload.toOwnedSlice(allocator, config.protocol) catch |err| {
         std.debug.print("OTLP transport: failed to encode payload via {s}: {?}\n", .{ @tagName(config.protocol), err });
@@ -738,7 +660,124 @@ pub fn Export(
     defer allocator.free(url);
 
     client.send(url, payload) catch |err| {
-        std.debug.print("OTLP transport: failed to send payload: {?}\n", .{err});
-        return err;
+        switch (err) {
+            ExportError.RequestEnqueuedForRetry => return err,
+            else => {
+                std.debug.print("OTLP transport: failed to send payload: {?}\n", .{err});
+                return err;
+            },
+        }
     };
+}
+
+// NOTE: This is **not used** in the current implementation, but it is here to show how it could be done.
+
+// This is an attempt to implement a priority queue for the retryable requests.
+// The retryable requests are stored in a priority queue, sorted by the next attempt time.
+// A single thread, or a thread pool, can be used to process the requests.
+fn ExpBackoffQueue(comptime Retry: type) type {
+    return struct {
+        const Self = @This();
+
+        const DelayedRetry = struct {
+            value: Retry,
+            next_attempt_time_ms: u64,
+            attempts_counter: u32,
+        };
+
+        allocator: std.mem.Allocator,
+        queue: std.PriorityQueue(DelayedRetry, void, compareRetriable),
+        mutex: std.Thread.Mutex,
+        condition: *std.Thread.Condition,
+        config: ExpBackoffconfig,
+
+        fn init(allocator: std.mem.Allocator, config: ExpBackoffconfig, signal: *std.Thread.Condition) !*Self {
+            const s = try allocator.create(Self);
+            s.* = Self{
+                .allocator = allocator,
+                .queue = std.PriorityQueue(DelayedRetry, void, compareRetriable).init(allocator, {}),
+                .mutex = std.Thread.Mutex{},
+                .condition = signal,
+                .config = config,
+            };
+            return s;
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.mutex.lock();
+            while (self.queue.removeOrNull()) |_| {}
+            self.queue.deinit();
+            self.mutex.unlock();
+
+            self.allocator.destroy(self);
+        }
+
+        fn compareRetriable(_: void, a: DelayedRetry, b: DelayedRetry) std.math.Order {
+            return std.math.order(a.next_attempt_time_ms, b.next_attempt_time_ms);
+        }
+
+        fn enqueue(self: *Self, value: Retry, attempt: u32) !void {
+            const next_attempt_ms = @as(u64, @intCast(std.time.milliTimestamp())) +
+                calculateDelayMillisec(self.config.base_delay_ms, self.config.max_delay_ms, attempt);
+
+            const req = DelayedRetry{
+                .value = value,
+                .attempts_counter = attempt,
+                .next_attempt_time_ms = next_attempt_ms,
+            };
+
+            self.mutex.lock();
+            try self.queue.add(req);
+            self.mutex.unlock();
+
+            self.condition.signal();
+        }
+
+        fn poll(self: *Self) ?Retry {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            if (self.queue.removeOrNull()) |item| {
+                const now_ms = std.time.milliTimestamp();
+                if (item.next_attempt_time_ms < now_ms) {
+                    self.condition.timedWait(
+                        &self.mutex,
+                        (@as(u64, @intCast(now_ms)) - item.next_attempt_time_ms) * std.time.ns_per_ms,
+                    ) catch {
+                        return item.value;
+                    };
+                }
+                return item.value;
+            }
+            return null;
+        }
+    };
+}
+
+test "otlp ExpBackOffqueue for request FetchOptions" {
+    var cond = std.Thread.Condition{};
+
+    const cfg = ExpBackoffconfig{
+        .max_retries = 10,
+        .base_delay_ms = 1,
+        .max_delay_ms = 1,
+    };
+    const queue = ExpBackoffQueue(*http.Client.FetchOptions);
+
+    const q = try queue.init(std.testing.allocator, cfg, &cond);
+    defer q.deinit();
+
+    var req = http.Client.FetchOptions{
+        .location = .{ .url = "http://localhost:4317/v1/metrics" },
+        .method = .POST,
+    };
+    try std.testing.expect(q.poll() == null);
+
+    try q.enqueue(&req, 0);
+    try std.testing.expectEqual(req, q.poll().?.*);
+}
+
+// Integration tests
+test {
+    _ = @import("otlp_test.zig");
 }
