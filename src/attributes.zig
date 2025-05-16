@@ -118,14 +118,46 @@ pub const Attributes = struct {
     }
 
     pub const HashContext = struct {
-        pub fn hash(_: HashContext, self: Self) u64 {
+        fn compareAttributes(context: void, a: Attribute, b: Attribute) bool {
+            _ = context;
+            return std.mem.lessThan(u8, a.key, b.key);
+        }
+
+        pub fn hash(_: HashContext, self: Self) !u64 {
             var h = std.hash.Wyhash.init(0);
             const attrs = self.attributes orelse &[_]Attribute{};
-            for (attrs) |attr| {
-                h.update(attr.key);
-                h.update(attr.value.toStringNoAlloc());
+
+            // If there are few attributes, just hash them directly to avoid allocation
+            if (attrs.len <= 8) {
+                var buffer: [8]Attribute = undefined;
+                const to_sort = buffer[0..@min(attrs.len, 8)];
+                @memcpy(to_sort, attrs[0..to_sort.len]);
+
+                if (to_sort.len > 1) {
+                    std.mem.sort(Attribute, to_sort, {}, compareAttributes);
+                }
+
+                for (to_sort) |attr| {
+                    h.update(attr.key);
+                    h.update(attr.value.toStringNoAlloc());
+                }
+                return h.final();
+            } else {
+                var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+                defer arena.deinit();
+
+                const allocator = arena.allocator();
+                const sorted_attrs = try allocator.dupe(Attribute, attrs);
+                if (sorted_attrs.len > 1) {
+                    std.mem.sort(Attribute, sorted_attrs, {}, compareAttributes);
+                }
+
+                for (sorted_attrs) |attr| {
+                    h.update(attr.key);
+                    h.update(attr.value.toStringNoAlloc());
+                }
+                return h.final();
             }
-            return h.final();
         }
         pub fn eql(_: HashContext, a: Self, b: Self) bool {
             const aAttrs = a.attributes orelse &[_]Attribute{};
