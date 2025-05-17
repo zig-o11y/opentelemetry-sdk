@@ -123,41 +123,28 @@ pub const Attributes = struct {
             return std.mem.lessThan(u8, a.key, b.key);
         }
 
-        pub fn hash(_: HashContext, self: Self) !u64 {
+        const MAX_ATTRS = 128;
+
+        pub fn hash(_: HashContext, self: Attributes) u64 {
             var h = std.hash.Wyhash.init(0);
             const attrs = self.attributes orelse &[_]Attribute{};
 
-            // If there are few attributes, just hash them directly to avoid allocation
-            if (attrs.len <= 8) {
-                var buffer: [8]Attribute = undefined;
-                const to_sort = buffer[0..@min(attrs.len, 8)];
-                @memcpy(to_sort, attrs[0..to_sort.len]);
+            // Enforce soft limit: only hash up to MAX_ATTRS attributes
+            const count = @min(attrs.len, MAX_ATTRS);
 
-                if (to_sort.len > 1) {
-                    std.mem.sort(Attribute, to_sort, {}, compareAttributes);
-                }
+            var buffer: [MAX_ATTRS]Attribute = undefined;
+            const to_sort = buffer[0..count];
+            @memcpy(to_sort, attrs[0..count]);
 
-                for (to_sort) |attr| {
-                    h.update(attr.key);
-                    h.update(attr.value.toStringNoAlloc());
-                }
-                return h.final();
-            } else {
-                var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-                defer arena.deinit();
-
-                const allocator = arena.allocator();
-                const sorted_attrs = try allocator.dupe(Attribute, attrs);
-                if (sorted_attrs.len > 1) {
-                    std.mem.sort(Attribute, sorted_attrs, {}, compareAttributes);
-                }
-
-                for (sorted_attrs) |attr| {
-                    h.update(attr.key);
-                    h.update(attr.value.toStringNoAlloc());
-                }
-                return h.final();
+            if (to_sort.len > 1) {
+                std.mem.sort(Attribute, to_sort, {}, compareAttributes);
             }
+
+            for (to_sort) |attr| {
+                h.update(attr.key);
+                h.update(attr.value.toStringNoAlloc());
+            }
+            return h.final();
         }
         pub fn eql(_: HashContext, a: Self, b: Self) bool {
             const aAttrs = a.attributes orelse &[_]Attribute{};

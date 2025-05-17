@@ -16,7 +16,7 @@ pub const InstrumentationScope = struct {
         pub fn hash(_: HashContext, self: Self) u64 {
             const hashContext = Attributes.HashContext{};
 
-            const attributesHash = hashContext.hash(Attributes.with(self.attributes)) catch @panic("Failed to hash attributes");
+            const attributesHash = hashContext.hash(Attributes.with(self.attributes));
 
             var h = std.hash.Wyhash.init(0);
 
