@@ -9,10 +9,15 @@ const HistogramDataPoint = @import("measurement.zig").HistogramDataPoint;
 const MeasurementsData = @import("measurement.zig").MeasurementsData;
 
 pub const Kind = enum {
+    // Synchronous instruments
     Counter,
     UpDownCounter,
     Histogram,
     Gauge,
+    // Observable instruments (ascynchronous)
+    ObservableCounter,
+    ObservableUpDownCounter,
+    ObservableGauge,
 
     pub fn toString(self: Kind) []const u8 {
         return switch (self) {
@@ -20,6 +25,9 @@ pub const Kind = enum {
             .UpDownCounter => "UpDownCounter",
             .Histogram => "Histogram",
             .Gauge => "Gauge",
+            .ObservableCounter => "ObservableCounter",
+            .ObservableUpDownCounter => "ObservableUpDownCounter",
+            .ObservableGauge => "ObservableGauge",
         };
     }
 };
