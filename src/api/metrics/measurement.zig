@@ -76,18 +76,30 @@ pub const MeasurementsData = union(enum) {
         }
     }
 
+    pub fn deinit(self: *MeasurementsData, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            inline else => |list| {
+                for (list) |*dp| dp.deinit(allocator);
+                allocator.free(list);
+            },
+        }
+    }
+
     /// Create a single entity from 2 distinct measurements data.
     /// If the active tags differ between the two, a panic will occur.
     /// Caller owns the memory.
-    pub fn join(first: MeasurementsData, other: MeasurementsData, allocator: std.mem.Allocator) !MeasurementsData {
-        return switch (first) {
-            .int => |list| MeasurementsData{ .int = try mergeDataPoints(i64, list, other.int, allocator) },
-            .double => |list| MeasurementsData{ .double = try mergeDataPoints(f64, list, other.double, allocator) },
-            .histogram => |list| MeasurementsData{ .histogram = try mergeDataPoints(HistogramDataPoint, list, other.histogram, allocator) },
-        };
+    pub fn join(self: *MeasurementsData, other: MeasurementsData, allocator: std.mem.Allocator) !void {
+        switch (self.*) {
+            .int => |list| self.int = try mergeDataPoints(i64, list, other.int, allocator),
+            .double => |list| self.double = try mergeDataPoints(f64, list, other.double, allocator),
+            .histogram => |list| self.histogram = try mergeDataPoints(HistogramDataPoint, list, other.histogram, allocator),
+        }
     }
 
     fn mergeDataPoints(comptime T: type, dp1: []DataPoint(T), dp2: []DataPoint(T), allocator: std.mem.Allocator) ![]DataPoint(T) {
+        defer allocator.free(dp1);
+        defer allocator.free(dp2);
+
         var ret = try allocator.alloc(DataPoint(T), dp1.len + dp2.len);
         for (dp1, 0..) |point, i| {
             ret[i] = point;
@@ -101,6 +113,7 @@ pub const MeasurementsData = union(enum) {
     /// Returns a new MeasurementsData with deduplicated data points based on their attributes.
     /// When attributes coincide with an existing data point, the older is discarded.
     pub fn dedupByAttributes(self: *MeasurementsData, allocator: std.mem.Allocator) !void {
+        if (self.isEmpty()) return;
         return switch (self.*) {
             .int => |list| self.int = try pruneByAttributes(i64, list, allocator),
             .double => |list| self.double = try pruneByAttributes(f64, list, allocator),
@@ -109,6 +122,8 @@ pub const MeasurementsData = union(enum) {
     }
 
     fn pruneByAttributes(comptime T: type, dp: []DataPoint(T), allocator: std.mem.Allocator) ![]DataPoint(T) {
+        defer allocator.free(dp);
+
         var seen = std.HashMap(
             Attributes,
             DataPoint(T),
@@ -147,31 +162,27 @@ test "MeasurementsData.join" {
     const allocator = std.testing.allocator;
 
     var dp1 = try allocator.alloc(DataPoint(i64), 1);
-    defer allocator.free(dp1);
-
     var dp2 = try allocator.alloc(DataPoint(i64), 1);
-    defer allocator.free(dp2);
 
     dp1[0] = try DataPoint(i64).new(allocator, 1, .{});
     dp2[0] = try DataPoint(i64).new(allocator, 2, .{});
 
-    const m1 = MeasurementsData{ .int = dp1 };
+    var m1 = MeasurementsData{ .int = dp1 };
     const m2 = MeasurementsData{ .int = dp2 };
 
-    const joined = try MeasurementsData.join(m1, m2, allocator);
-    defer allocator.free(joined.int);
-    defer for (joined.int) |*dp| dp.deinit(allocator);
+    try m1.join(m2, allocator);
+    defer allocator.free(m1.int);
+    defer for (m1.int) |*dp| dp.deinit(allocator);
 
-    try std.testing.expect(joined.int.len == 2);
-    try std.testing.expect(joined.int[0].value == 1);
-    try std.testing.expect(joined.int[1].value == 2);
+    try std.testing.expect(m1.int.len == 2);
+    try std.testing.expect(m1.int[0].value == 1);
+    try std.testing.expect(m1.int[1].value == 2);
 }
 
 test "MeasurementsData.dedupByAttributes" {
     const allocator = std.testing.allocator;
 
     var dp = try allocator.alloc(DataPoint(i64), 4);
-    defer allocator.free(dp);
 
     const val1: []const u8 = "value1";
     const val2: []const u8 = "value2";
