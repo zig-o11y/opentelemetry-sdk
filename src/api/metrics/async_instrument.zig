@@ -23,7 +23,52 @@ const ObservedContext = struct {
     /// The context in which the measurements were observed.
     /// This can be used to pass additional data to the callback.
     context: ?*anyopaque = null,
+
+    /// Returns a new ObservedContext with the given context.
+    /// The context is expected to be a pointer to any type that the callback can use.
+    pub fn from(inner: anytype) ObservedContext {
+        return ObservedContext{ .context = @ptrCast(inner) };
+    }
+
+    pub fn into(self: ObservedContext, comptime T: type) ?*T {
+        if (self.context) |c| {
+            const o: *T = @ptrCast(@alignCast(c));
+            return o;
+        }
+        return null;
+    }
 };
+
+test ObservedContext {
+    const test_alloc = std.testing.allocator;
+    const gauges = struct {
+        sensor_1: i64,
+        sensor_2: i64,
+    };
+    const observer = struct {
+        data: gauges,
+
+        fn observe(ctx: ObservedContext, allocator: std.mem.Allocator) MetricObserveError!MeasurementsData {
+            const g = ctx.into(gauges);
+
+            const temperatures = try allocator.alloc(DataPoint(i64), 2);
+            temperatures[0] = try DataPoint(i64).new(allocator, g.?.sensor_1, .{ "sensorID", @as(u64, 0) });
+            temperatures[1] = try DataPoint(i64).new(allocator, g.?.sensor_2, .{ "sensorID", @as(u64, 1) });
+            return .{ .int = temperatures };
+        }
+    };
+
+    var observation = gauges{ .sensor_1 = 42, .sensor_2 = -100 };
+
+    const data = try observer.observe(
+        ObservedContext.from(&observation),
+        test_alloc,
+    );
+    defer {
+        for (data.int) |*dp| dp.deinit(test_alloc);
+        test_alloc.free(data.int);
+    }
+}
 
 /// Defines the callback that can be used to observe measurements in Asynchronous Instruments.
 /// The "context" parameter is used to pass any additional data needed for the observation.
@@ -45,10 +90,12 @@ pub fn ObservableInstrument(K: Kind) type {
                 /// List of functions that will produce data points when called.
                 /// Functions are called by the Meter when it observes the instrument (e.g. when Metricreader collects metrics).
                 callbacks: ?[]ObserveMeasures = null,
+                context: ObservedContext,
 
-                pub fn init(allocator: std.mem.Allocator) Self {
+                pub fn init(allocator: std.mem.Allocator, ctx: ?ObservedContext) Self {
                     return Self{
                         .allocator = allocator,
+                        .context = ctx orelse .{},
                     };
                 }
 
@@ -77,7 +124,7 @@ pub fn ObservableInstrument(K: Kind) type {
                     }
                 }
 
-                fn observe(self: *Self, ctx: ObservedContext, allocator: std.mem.Allocator) MetricObserveError!?MeasurementsData {
+                fn observe(self: *Self, allocator: std.mem.Allocator) MetricObserveError!?MeasurementsData {
                     self.lock.lock();
                     defer self.lock.unlock();
 
@@ -86,7 +133,13 @@ pub fn ObservableInstrument(K: Kind) type {
                         defer allocator.free(m);
 
                         for (c, 0..) |callback, idx| {
-                            const result = try callback(ctx, allocator);
+                            var result = try callback(self.context, allocator);
+                            errdefer {
+                                result.deinit(allocator);
+                                for (m[0..idx]) |*mes| {
+                                    mes.deinit(allocator);
+                                }
+                            }
                             // We need to ensure that all callbacks return the same type of data points.
                             if (idx > 0) {
                                 if (std.meta.activeTag(result) != std.meta.activeTag(m[idx - 1])) {
@@ -121,7 +174,7 @@ pub fn ObservableInstrument(K: Kind) type {
                 /// Data points with the same attributes are de-duplicated keeping only the last one,
                 /// by the order of callbacks registration.
                 pub fn measurementsData(self: *Self, allocator: std.mem.Allocator) !MeasurementsData {
-                    return try self.observe(.{}, allocator) orelse MeasurementsData{ .int = &.{} };
+                    return try self.observe(allocator) orelse MeasurementsData{ .int = &.{} };
                 }
             };
         },
@@ -140,7 +193,7 @@ test ObservableInstrument {
     const instrument = try allocator.create(ObservableInstrument(.ObservableUpDownCounter));
     defer allocator.destroy(instrument);
 
-    instrument.* = ObservableInstrument(.ObservableUpDownCounter).init(allocator);
+    instrument.* = ObservableInstrument(.ObservableUpDownCounter).init(allocator, null);
     defer instrument.deinit();
 
     try instrument.registerCallback(testCallback);
@@ -154,7 +207,7 @@ test "observable instrument with multiple callbacks" {
     const instrument = try allocator.create(ObservableInstrument(.ObservableGauge));
     defer allocator.destroy(instrument);
 
-    instrument.* = ObservableInstrument(.ObservableGauge).init(allocator);
+    instrument.* = ObservableInstrument(.ObservableGauge).init(allocator, null);
     defer instrument.deinit();
 
     try instrument.registerCallback(testCallback);
@@ -175,14 +228,14 @@ test "observable instrument collects data" {
     const instrument = try allocator.create(ObservableInstrument(.ObservableCounter));
     defer allocator.destroy(instrument);
 
-    instrument.* = ObservableInstrument(.ObservableCounter).init(allocator);
+    instrument.* = ObservableInstrument(.ObservableCounter).init(allocator, null);
     defer instrument.deinit();
 
     try instrument.registerCallback(testCallbackWithAttrs);
     try instrument.registerCallback(testCallbackWithAttrs);
 
     // We expect the data to be de-duplicated, so we should only have one data point.
-    const data = try instrument.observe(.{}, allocator);
+    const data = try instrument.observe(allocator);
     defer {
         for (data.?.double) |*dp| dp.deinit(allocator);
         allocator.free(data.?.double);
@@ -191,9 +244,19 @@ test "observable instrument collects data" {
     try std.testing.expectEqual(1, data.?.double.len);
 }
 
-test "observable instrument fails to observe callbacks with different data types" {}
+test "observable instrument fails to observe callbacks with different data types" {
+    const allocator = std.testing.allocator;
+    const instrument = try allocator.create(ObservableInstrument(.ObservableCounter));
+    defer allocator.destroy(instrument);
 
-test "observable instrument with context passed from observe to callbacks" {}
+    instrument.* = ObservableInstrument(.ObservableCounter).init(allocator, null);
+    defer instrument.deinit();
+    try instrument.registerCallback(testCallback);
+    try instrument.registerCallback(testCallbackWithAttrs);
+
+    const result = instrument.observe(allocator);
+    try std.testing.expectError(MetricObserveError.NonUniformMeasurementsDataType, result);
+}
 
 // The specification says:
 // "Callback functions SHOULD NOT make duplicate observations (more than one Measurement with the same attributes) across all registered callbacks."
@@ -203,7 +266,7 @@ test "observable instrument de-duplicate datapoints when fetching" {
     const instrument = try allocator.create(ObservableInstrument(.ObservableGauge));
     defer allocator.destroy(instrument);
 
-    instrument.* = ObservableInstrument(.ObservableGauge).init(allocator);
+    instrument.* = ObservableInstrument(.ObservableGauge).init(allocator, null);
     defer instrument.deinit();
 
     try instrument.registerCallback(testCallbackWithAttrs);
@@ -215,4 +278,44 @@ test "observable instrument de-duplicate datapoints when fetching" {
     defer for (data.double) |*dp| dp.deinit(allocator);
 
     try std.testing.expectEqual(1, data.double.len);
+}
+
+test "observable instrument e2e measurements with context" {
+    const allocator = std.testing.allocator;
+
+    const request = struct {
+        const Self = @This();
+
+        user: []const u8,
+        counter: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+
+        fn incr(self: *Self) void {
+            _ = self.counter.fetchAdd(1, .acq_rel);
+        }
+
+        fn testCallbackWithRequest(ctx: ObservedContext, alloc: std.mem.Allocator) MetricObserveError!MeasurementsData {
+            const req = ctx.into(Self);
+            if (req) |r| {
+                r.incr();
+                const data = try alloc.alloc(DataPoint(i64), 1);
+                data[0] = try DataPoint(i64).new(alloc, r.counter.load(.monotonic), .{ "user", r.user });
+                return .{ .int = data };
+            }
+            return MetricObserveError.CallbackExecutionFailed;
+        }
+    };
+
+    const instrument = try allocator.create(ObservableInstrument(.ObservableUpDownCounter));
+    defer allocator.destroy(instrument);
+
+    var monitor = request{ .user = "test-user" };
+    instrument.* = ObservableInstrument(.ObservableUpDownCounter).init(allocator, ObservedContext.from(&monitor));
+    defer instrument.deinit();
+
+    try instrument.registerCallback(request.testCallbackWithRequest);
+
+    var data = try instrument.measurementsData(allocator);
+    defer data.deinit(allocator);
+
+    try std.testing.expectEqual(1, data.int.len);
 }
