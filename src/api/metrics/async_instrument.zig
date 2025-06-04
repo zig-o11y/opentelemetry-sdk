@@ -19,7 +19,9 @@ pub const MetricObserveError = error{
     NonUniformMeasurementsDataType,
 } || std.mem.Allocator.Error;
 
-const ObservedContext = struct {
+/// The context in which the measurements were observed.
+/// This struct is used to pass additional data to the callback that observes the measurements.
+pub const ObservedContext = struct {
     /// The context in which the measurements were observed.
     /// This can be used to pass additional data to the callback.
     context: ?*anyopaque = null,
@@ -85,7 +87,6 @@ pub fn ObservableInstrument(K: Kind) type {
                 const Self = @This();
 
                 allocator: std.mem.Allocator,
-                kind: Kind = K,
                 lock: std.Thread.Mutex = .{},
                 /// List of functions that will produce data points when called.
                 /// Functions are called by the Meter when it observes the instrument (e.g. when Metricreader collects metrics).
@@ -134,13 +135,17 @@ pub fn ObservableInstrument(K: Kind) type {
 
                         for (c, 0..) |callback, idx| {
                             var result = try callback(self.context, allocator);
+                            // If we encounter an error while observing, we need to clear the memory allocated for the current
+                            // callback execution, as well as the previously allocated measurements.
+                            // A failure in one callback affects all the others.
                             errdefer {
                                 result.deinit(allocator);
                                 for (m[0..idx]) |*mes| {
                                     mes.deinit(allocator);
                                 }
                             }
-                            // We need to ensure that all callbacks return the same type of data points.
+                            // We need to ensure that all callbacks return the same type of data points,
+                            // because we are merging them into a single MeasurementsData.
                             if (idx > 0) {
                                 if (std.meta.activeTag(result) != std.meta.activeTag(m[idx - 1])) {
                                     return MetricObserveError.NonUniformMeasurementsDataType;
