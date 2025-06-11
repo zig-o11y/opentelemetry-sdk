@@ -432,57 +432,37 @@ const view = @import("../../sdk/metrics/view.zig");
 /// MetricReader's temporality and aggregation functions.
 pub const AggregatedMetrics = struct {
     fn sum(comptime T: type, data_points: []DataPoint(T), allocator: std.mem.Allocator) ![]DataPoint(T) {
-        var deduped = try std.ArrayListUnmanaged(DataPoint(T)).initCapacity(allocator, data_points.len);
-        var temp = std.HashMap(
+        var deduped = std.ArrayHashMap(
             Attributes,
-            T,
-            Attributes.HashContext,
-            std.hash_map.default_max_load_percentage,
+            DataPoint(T),
+            Attributes.ArrayHashContext,
+            true,
         ).init(allocator);
-        // No need to cleanup the keys, they are the same Attribute slices from instruments_datapoints.
-        defer temp.deinit();
+        // No need to cleanup the keys, they are reference to the same Attribute slices from data_points.
+        defer deduped.deinit();
 
         for (data_points) |dp| {
             const key = Attributes.with(dp.attributes);
-            const value = dp.value;
-            const gop = try temp.getOrPut(key);
-            if (!gop.found_existing) gop.value_ptr.* = value else gop.value_ptr.* += value;
+            const gop = try deduped.getOrPut(key);
+            if (!gop.found_existing) gop.value_ptr.* = try dp.deepCopy(allocator) else gop.value_ptr.*.value += dp.value;
         }
-        var iter = temp.iterator();
-        while (iter.next()) |entry| {
-            const dp = DataPoint(T){
-                .attributes = try Attributes.with(entry.key_ptr.*.attributes).dupe(allocator),
-                .value = entry.value_ptr.*,
-            };
-            try deduped.append(allocator, dp);
-        }
-        return try deduped.toOwnedSlice(allocator);
+        return allocator.dupe(DataPoint(T), deduped.values());
     }
 
     fn lastValue(comptime T: type, data_points: []DataPoint(T), allocator: std.mem.Allocator) ![]DataPoint(T) {
-        var deduped = try std.ArrayListUnmanaged(DataPoint(T)).initCapacity(allocator, data_points.len);
-        var temp = std.HashMap(
+        var deduped = std.ArrayHashMap(
             Attributes,
-            T,
-            Attributes.HashContext,
-            std.hash_map.default_max_load_percentage,
+            DataPoint(T),
+            Attributes.ArrayHashContext,
+            true,
         ).init(allocator);
-        // No need to cleanup the keys, they are the same Attribute slices from instruments_datapoints.
-        defer temp.deinit();
+        defer deduped.deinit();
 
         for (data_points) |dp| {
             const key = Attributes.with(dp.attributes);
-            try temp.put(key, dp.value);
+            try deduped.put(key, try dp.deepCopy(allocator));
         }
-        var iter = temp.iterator();
-        while (iter.next()) |entry| {
-            const dp = DataPoint(T){
-                .attributes = try Attributes.with(entry.key_ptr.*.attributes).dupe(allocator),
-                .value = entry.value_ptr.*,
-            };
-            try deduped.append(allocator, dp);
-        }
-        return try deduped.toOwnedSlice(allocator);
+        return allocator.dupe(DataPoint(T), deduped.values());
     }
 
     fn aggregate(allocator: std.mem.Allocator, data_points: MeasurementsData, aggregation: view.Aggregation) !?MeasurementsData {
