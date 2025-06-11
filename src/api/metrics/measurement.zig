@@ -13,6 +13,7 @@ pub fn DataPoint(comptime T: type) type {
 
         value: T,
         attributes: ?[]Attribute = null,
+        timestamps: ?Timestamps = null, // Timestamps are filled in when extracting data points from the meter.
 
         /// Creates a data points with the provided value and attributes,
         /// adding a timestamp with the current time.
@@ -49,6 +50,14 @@ pub fn DataPoint(comptime T: type) type {
         }
     };
 }
+
+/// Times used to report temporal aggregation.
+/// Start time is used to indicate the continuation of previous measurements,
+/// while time is used to indicate the moment the measurement is collected from a reader.
+pub const Timestamps = struct {
+    start_time_ns: u64, // This is what is referred to as "StartTimeUnixNano" in the OTel spec.
+    time_ns: u64, // This is what is referred to as "TimeUnixNano" in the OTel spec.
+};
 
 test "datapoint without attributes" {
     var m = try DataPoint(u32).new(std.testing.allocator, 42, .{});
