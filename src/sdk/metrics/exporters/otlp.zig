@@ -184,7 +184,7 @@ fn numberDataPoints(allocator: std.mem.Allocator, comptime T: type, data_points:
         const attrs = try attributesToProtobufKeyValueList(allocator, dp.attributes);
         a.appendAssumeCapacity(pbmetrics.NumberDataPoint{
             .attributes = attrs.values,
-            .start_time_unix_nano = if (dp.timestamps) |ts| ts.start_time_ns else 0,
+            .start_time_unix_nano = if (dp.timestamps) |ts| ts.start_time_ns orelse 0 else 0,
             .time_unix_nano = if (dp.timestamps) |ts| ts.time_ns else @intCast(std.time.nanoTimestamp()),
             .value = switch (T) {
                 i64 => .{ .as_int = dp.value },
@@ -208,7 +208,7 @@ fn histogramDataPoints(allocator: std.mem.Allocator, data_points: []DataPoint(Hi
         const attrs = try attributesToProtobufKeyValueList(allocator, dp.attributes);
         a.appendAssumeCapacity(pbmetrics.HistogramDataPoint{
             .attributes = attrs.values,
-            .start_time_unix_nano = if (dp.timestamps) |ts| ts.start_time_ns else 0,
+            .start_time_unix_nano = if (dp.timestamps) |ts| ts.start_time_ns orelse 0 else 0,
             .time_unix_nano = if (dp.timestamps) |ts| ts.time_ns else @intCast(std.time.nanoTimestamp()),
             .count = dp.value.count,
             .sum = dp.value.sum,

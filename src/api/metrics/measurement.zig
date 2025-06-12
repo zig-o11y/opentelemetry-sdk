@@ -55,8 +55,10 @@ pub fn DataPoint(comptime T: type) type {
 /// Start time is used to indicate the continuation of previous measurements,
 /// while time is used to indicate the moment the measurement is collected from a reader.
 pub const Timestamps = struct {
-    start_time_ns: u64, // This is what is referred to as "StartTimeUnixNano" in the OTel spec.
-    time_ns: u64, // This is what is referred to as "TimeUnixNano" in the OTel spec.
+    /// Referred to as "TimeUnixNano" in the OTel spec: the time when the measurement was collected.
+    time_ns: u64,
+    /// Referred to as "StartTimeUnixNano" in the OTel spec: an optional indication of unbroken time series.
+    start_time_ns: ?u64 = null,
 };
 
 test "datapoint without attributes" {
