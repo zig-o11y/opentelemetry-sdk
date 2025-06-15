@@ -50,3 +50,7 @@ pub const AggregationSelector = *const fn (instrument.Kind) Aggregation;
 pub fn TemporalityCumulative(_: instrument.Kind) Temporality {
     return .Cumulative;
 }
+
+pub fn TemporalityDelta(_: instrument.Kind) Temporality {
+    return .Delta;
+}
