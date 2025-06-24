@@ -18,11 +18,15 @@ const std = @import("std");
 const attributes = @import("../../attributes.zig");
 const AttributeValue = attributes.AttributeValue;
 
-/// Thread-safe compile-time key ID generator.
+/// Compile-time key ID generator for creating unique IDs during compilation.
 ///
 /// This structure encapsulates the compile-time counter state to prevent
 /// type resolution cascades that can occur with bare global variables.
 /// Each call to `next()` returns a unique ID starting from 0.
+///
+/// Note: This is NOT thread-safe at runtime. It only works at compile-time
+/// where there is no concurrency. This generator is only called from the
+/// `Key()` function which executes at compile-time.
 const ComptimeKeyGenerator = struct {
     var next_id: usize = 0;
 
@@ -407,7 +411,7 @@ test "detach error handling" {
     try std.testing.expect(try detachContext(token1));
 }
 
-test "compile time key creation" {
+test "key creation" {
     const MyKey = Key("my_service.request_id");
     const OtherKey = Key("my_service.request_id");
     try std.testing.expect(MyKey.id != OtherKey.id);
@@ -427,4 +431,128 @@ test "context chaining" {
     try std.testing.expectEqualStrings("value2", ctx2.getValue(key2).?.string);
     try std.testing.expectEqualStrings("value1", ctx1.getValue(key1).?.string);
     try std.testing.expect(ctx1.getValue(key2) == null);
+}
+
+test "context thread isolation" {
+    // Verify that each thread has its own independent context stack
+    var thread_count = std.atomic.Value(u32).init(0);
+
+    const threadWorker = struct {
+        fn run(counter: *std.atomic.Value(u32)) void {
+            defer cleanup();
+
+            // Each thread should start with an uninitialized context stack
+            if (context_stack == null) {
+                _ = counter.fetchAdd(1, .seq_cst);
+            }
+        }
+    }.run;
+
+    // Spawn multiple threads to verify isolation
+    const t1 = try std.Thread.spawn(.{}, threadWorker, .{&thread_count});
+    const t2 = try std.Thread.spawn(.{}, threadWorker, .{&thread_count});
+    const t3 = try std.Thread.spawn(.{}, threadWorker, .{&thread_count});
+
+    t1.join();
+    t2.join();
+    t3.join();
+
+    // All threads should have seen null context_stack initially
+    try std.testing.expectEqual(@as(u32, 3), thread_count.load(.seq_cst));
+}
+
+test "context thread-local storage verification" {
+    // Verify that thread-local storage works correctly for context stacks
+    var success = std.atomic.Value(bool).init(false);
+
+    const verifyThreadLocal = struct {
+        fn run(result: *std.atomic.Value(bool)) void {
+            // Verify this thread has its own context_stack variable
+            if (context_stack == null) {
+                result.store(true, .seq_cst);
+            }
+        }
+    }.run;
+
+    const thread = try std.Thread.spawn(.{}, verifyThreadLocal, .{&success});
+    thread.join();
+
+    try std.testing.expect(success.load(.seq_cst));
+}
+
+test "runtime key creation thread safety" {
+    // This test verifies that createKey() is thread-safe by having multiple
+    // threads create keys simultaneously and checking for uniqueness
+
+    const num_threads = 4;
+    const keys_per_thread = 100;
+
+    // Shared state for collecting results
+    const SharedData = struct {
+        keys: std.ArrayList(ContextKey),
+        mutex: std.Thread.Mutex = .{},
+        barrier: std.Thread.ResetEvent = .{},
+    };
+
+    var shared = SharedData{
+        .keys = std.ArrayList(ContextKey).init(std.testing.allocator),
+    };
+    defer shared.keys.deinit();
+
+    const keyGenWorker = struct {
+        fn run(data: *SharedData, thread_id: u32) void {
+            // Wait for all threads to start
+            data.barrier.wait();
+
+            // Generate keys rapidly to stress test atomicity
+            var local_keys: [keys_per_thread]ContextKey = undefined;
+            for (0..keys_per_thread) |i| {
+                var name_buf: [64]u8 = undefined;
+                const name = std.fmt.bufPrint(
+                    &name_buf,
+                    "thread_{}_key_{}",
+                    .{ thread_id, i },
+                ) catch unreachable;
+                local_keys[i] = createKey(name);
+            }
+
+            // Add to shared collection
+            data.mutex.lock();
+            defer data.mutex.unlock();
+            data.keys.appendSlice(&local_keys) catch unreachable;
+        }
+    }.run;
+
+    // Spawn threads
+    var threads: [num_threads]std.Thread = undefined;
+    for (0..num_threads) |i| {
+        threads[i] = try std.Thread.spawn(
+            .{},
+            keyGenWorker,
+            .{ &shared, @as(u32, @intCast(i)) },
+        );
+    }
+
+    // Start all threads simultaneously
+    shared.barrier.set();
+
+    // Wait for completion
+    for (threads) |thread| {
+        thread.join();
+    }
+
+    // Verify we have the expected number of keys
+    try std.testing.expectEqual(
+        @as(usize, num_threads * keys_per_thread),
+        shared.keys.items.len,
+    );
+
+    // Verify all key IDs are unique
+    var seen = std.AutoHashMap(usize, void).init(std.testing.allocator);
+    defer seen.deinit();
+
+    for (shared.keys.items) |key| {
+        const result = try seen.getOrPut(key.id);
+        try std.testing.expect(!result.found_existing);
+    }
 }
