@@ -1,5 +1,4 @@
 const std = @import("std");
-const protobuf = @import("protobuf");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
@@ -10,56 +9,20 @@ pub fn build(b: *std.Build) !void {
 
     // Dependencies section
     // Benchmarks lib
-    const benchmarks_dep = b.dependency("zbench", .{
-        .target = target,
+    const benchmarks_dep = b.dependency("zbench", .{});
+
+    // OpenTelemetry proto package ships protobuf as a dependency so we'll use it.
+    const otel_pb_dep = b.dependency("opentelemetry_proto", .{
         .optimize = optimize,
-    });
-
-    // Protobuf code generation from the OpenTelemetry proto files.
-    const protobuf_dep = b.dependency("protobuf", .{
         .target = target,
+    });
+    const otel_proto_mod = otel_pb_dep.module("opentelemetry-proto");
+    const protobuf_mod = otel_pb_dep.builder.dependency("protobuf", .{
         .optimize = optimize,
-    });
-
-    const protoc_step = protobuf.RunProtocStep.create(b, protobuf_dep.builder, target, .{
-        // Output directory for the generated zig files
-        .destination_directory = b.path("src"),
-        .source_files = &.{
-            // Add more protobuf definitions as the API grows
-            // Signals
-            "proto-src/opentelemetry/proto/common/v1/common.proto",
-            "proto-src/opentelemetry/proto/resource/v1/resource.proto",
-            "proto-src/opentelemetry/proto/metrics/v1/metrics.proto",
-            "proto-src/opentelemetry/proto/trace/v1/trace.proto",
-            "proto-src/opentelemetry/proto/logs/v1/logs.proto",
-            // collector types for OTLP
-            "proto-src/opentelemetry/proto/collector/metrics/v1/metrics_service.proto",
-            "proto-src/opentelemetry/proto/collector/trace/v1/trace_service.proto",
-            "proto-src/opentelemetry/proto/collector/logs/v1/logs_service.proto",
-        },
-        .include_directories = &.{
-            // Importsin proto files requires that the top-level directory
-            // containing te proto files is included
-            "proto-src/",
-        },
-    });
-
-    // Debug protoc generation in all builds
-    protoc_step.verbose = true;
-
-    const gen_proto = b.step("gen-proto", "Generates Zig files from protobuf definitions");
-    gen_proto.dependOn(&protoc_step.step);
-
-    // Protobuf-generated code gets its own internal module
-    const proto_mod = b.createModule(.{
-        .root_source_file = b.path("src/opentelemetry/proto/proto.zig"),
         .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "protobuf", .module = protobuf_dep.module("protobuf") },
-        },
-    });
+    }).module("protobuf");
 
+    // Modules section
     const sdk_mod = b.addModule("sdk", .{
         .root_source_file = b.path("src/sdk.zig"),
         .target = target,
@@ -67,8 +30,8 @@ pub fn build(b: *std.Build) !void {
         .strip = false,
         .unwind_tables = .sync,
         .imports = &.{
-            .{ .name = "protobuf", .module = protobuf_dep.module("protobuf") },
-            .{ .name = "opentelemetry-proto", .module = proto_mod },
+            .{ .name = "protobuf", .module = protobuf_mod },
+            .{ .name = "opentelemetry-proto", .module = otel_proto_mod },
         },
     });
 
@@ -107,8 +70,8 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "opentelemetry-sdk", .module = sdk_mod },
-            .{ .name = "protobuf", .module = protobuf_dep.module("protobuf") },
-            .{ .name = "opentelemetry-proto", .module = proto_mod },
+            .{ .name = "protobuf", .module = protobuf_mod },
+            .{ .name = "opentelemetry-proto", .module = otel_proto_mod },
         },
     });
     // TODO add examples for other signals
@@ -117,7 +80,7 @@ pub fn build(b: *std.Build) !void {
         b.path(b.pathJoin(&.{ "examples", "metrics" })),
         sdk_mod,
         otel_stub_mod,
-        proto_mod,
+        otel_proto_mod,
         examples_filter,
     ) catch |err| {
         std.debug.print("Error building metrics examples: {}\n", .{err});
