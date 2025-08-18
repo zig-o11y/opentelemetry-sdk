@@ -442,4 +442,3 @@ fn isSetup(t: std.builtin.TestFn) bool {
 fn isTeardown(t: std.builtin.TestFn) bool {
     return std.mem.endsWith(u8, t.name, "tests:afterAll");
 }
-
