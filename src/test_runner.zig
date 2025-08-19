@@ -1,5 +1,5 @@
 // Custom test runner for OpenTelemetry SDK
-// https://gist.github.com/karlseguin/e8e74cf5260435ec7cbf3e4c71605722
+// https://gist.github.com/karlseguin/c6bea5b35e4e8d26af6f81c22cb5d76b
 // Modified to capture log output and prevent stderr messages during tests
 
 const std = @import("std");
@@ -103,7 +103,7 @@ pub const std_options: std.Options = .{
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
     // Initialize log capture
