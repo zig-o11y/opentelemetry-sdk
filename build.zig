@@ -81,13 +81,26 @@ pub fn build(b: *std.Build) !void {
         },
     });
 
+    // Static library for the OpenTelemetry SDK C users
     const sdk_lib = b.addLibrary(.{
         .name = "opentelemetry-sdk",
-        .root_module = sdk_mod,
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/c.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     sdk_lib.linkLibrary(zlib_lib); // TODO: remove when 0.16.0 is released
 
     b.installArtifact(sdk_lib);
+
+    // Install include headers for C users
+    b.installDirectory(.{
+        .source_dir = b.path("include"),
+        .install_dir = .header,
+        .install_subdir = "",
+    });
 
     // Providing a way for the user to request running the unit tests.
     const test_step = b.step("test", "Run unit tests");
@@ -149,6 +162,47 @@ pub fn build(b: *std.Build) !void {
             const run_example = b.addRunArtifact(step);
             examples_step.dependOn(&run_example.step);
         }
+    }
+
+    // C examples
+    const c_example_step = b.step("examples-c", "Build and run C examples");
+
+    const c_examples = [_][]const u8{
+        "logs",
+        "metrics",
+        "trace",
+    };
+
+    for (c_examples) |example_name| {
+        const c_example_exe = b.addExecutable(.{
+            .name = example_name,
+            .root_module = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
+        });
+
+        c_example_exe.addCSourceFile(.{
+            .file = b.path(b.pathJoin(&.{
+                "examples",
+                "c",
+                b.fmt("{s}.c", .{example_name}),
+            })),
+            .flags = &.{
+                "-std=c11",
+                "-Wall",
+                "-Wextra",
+            },
+        });
+        c_example_exe.addIncludePath(b.path("include"));
+        c_example_exe.linkLibrary(sdk_lib);
+
+        const run_c_example = b.addRunArtifact(c_example_exe);
+        c_example_step.dependOn(&run_c_example.step);
+
+        // Also install each C example executable
+        b.installArtifact(c_example_exe);
     }
 
     // Benchmarks
