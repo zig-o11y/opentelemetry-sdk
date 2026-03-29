@@ -455,10 +455,6 @@ const HTTPClient = struct {
     client: http.Client,
 
     pub fn init(allocator: std.mem.Allocator, config: *ConfigOptions) !*Self {
-        var env = try std.process.getEnvMap(allocator);
-        defer env.deinit();
-        // Merge the environment variables into the config.
-        try config.mergeFromEnvMap(&env);
         try config.validate();
 
         const s = try allocator.create(Self);
