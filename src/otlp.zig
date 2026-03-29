@@ -4,7 +4,7 @@
 //! See https://opentelemetry.io/docs/specs/otlp/
 //!
 //! OTLP transport can be have 2 types of transport: HTTP or gRPC.
-//! Currently, only HTTP transport is implemented, because gRPC is not yet supported in Zig's ecosystem.
+//! The gRPC transport is provided by a build-time option `-Dgrpc-provider=libgrpc`.
 
 const std = @import("std");
 const http = std.http;
@@ -17,6 +17,7 @@ const log = std.log.scoped(.otlp);
 
 const proto = @import("opentelemetry-proto");
 const protobuf = @import("protobuf");
+const grpc_transport = @import("grpc_transport");
 
 const pbmetrics = proto.metrics_v1;
 const pblogs = proto.logs_v1;
@@ -114,6 +115,14 @@ pub const Signal = enum {
             .metrics => return "/v1/metrics",
             .logs => return "/v1/logs",
             .traces => return "/v1/traces",
+        }
+    }
+
+    fn grpcPath(self: Self) []const u8 {
+        switch (self) {
+            .metrics => return "/opentelemetry.proto.collector.metrics.v1.MetricsService/Export",
+            .logs => return "/opentelemetry.proto.collector.logs.v1.LogsService/Export",
+            .traces => return "/opentelemetry.proto.collector.trace.v1.TraceService/Export",
         }
     }
 
@@ -778,33 +787,38 @@ pub fn Export(
     config: *ConfigOptions,
     otlp_payload: Signal.Data,
 ) !void {
-    // FIXME better polymorphism here.
-    // Determine the type of client to be used, currently only HTTP is supported.
-    const client = switch (config.protocol) {
-        .http_json, .http_protobuf => try HTTPClient.init(allocator, config),
-        .grpc => return ExportError.UnimplementedTransportProtocol,
-    };
-    // the `deinit()` method MUST be implemented by all clients.
-    defer client.deinit();
-
     const payload = otlp_payload.toOwnedSlice(allocator, config.protocol) catch |err| {
-        log.err("failed to encode payload via {t}: {}", .{ config.protocol, err });
+        log.err("failed to encode payload: {}", .{err});
         return err;
     };
     defer allocator.free(payload);
 
-    const url = try config.httpUrlForSignal(otlp_payload.signal(), allocator);
-    defer allocator.free(url);
+    switch (config.protocol) {
+        .http_json, .http_protobuf => {
+            // FIXME better polymorphism here.
+            const http_client = try HTTPClient.init(allocator, config);
+            defer http_client.deinit();
 
-    client.send(url, payload) catch |err| {
-        switch (err) {
-            ExportError.RequestEnqueuedForRetry => return err,
-            else => {
-                log.err("failed to send payload: {}", .{err});
+            const url = try config.httpUrlForSignal(otlp_payload.signal(), allocator);
+            defer allocator.free(url);
+
+            http_client.send(url, payload) catch |err| {
+                switch (err) {
+                    ExportError.RequestEnqueuedForRetry => return err,
+                    else => {
+                        log.err("failed to send payload: {}", .{err});
+                        return err;
+                    },
+                }
+            };
+        },
+        .grpc => {
+            grpc_transport.send(allocator, config.endpoint, config.timeout_sec, otlp_payload.signal().grpcPath(), payload) catch |err| {
+                log.err("failed to send grpc payload: {}", .{err});
                 return err;
-            },
-        }
-    };
+            };
+        },
+    }
 }
 
 pub fn ExportFile(

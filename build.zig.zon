@@ -33,8 +33,12 @@
         },
         // TODO: remove when 0.16.0 is released
         .zlib = .{
-            .url = "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
-            .hash = "1220fed0c74e1019b3ee29edae2051788b080cd96e90d56836eea857b0b966742efb",
+            .url = "git+https://github.com/madler/zlib?ref=v1.3.1.2#570720b0c24f9686c33f35a1b3165c1f568b96be",
+            .hash = "N-V-__8AAHGfRAD_mDFD4sWBe75WciDX0TKbL8zqRsON4c7x",
+        },
+        .cgrpc_wrapper = .{
+            .url = "git+https://github.com/agagniere/cgrpc_wrapper?ref=zig-0.15#9993b70cfdbb6c919f1b3612bcc66308517f8791",
+            .hash = "cgrpc_wrapper-0.1.0-O5w4NdN1AAAr2oWx0qIKvmf86WYhpghXxRb6wnp1QlhD",
         },
     },
     .paths = .{

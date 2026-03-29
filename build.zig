@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const GrpcProvider = enum { none, libgrpc, zig_grpc };
+
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -9,6 +11,7 @@ pub fn build(b: *std.Build) !void {
     const test_show_logs = b.option(bool, "test-show-logs", "Show captured log output for tests") orelse false;
     const benchmark_output = b.option([]const u8, "benchmark-output", "Path to write benchmark results to a file");
     const benchmark_debug = b.option(bool, "benchmark-debug", "Enable debug build mode for benchmarks") orelse false;
+    const grpc_provider = b.option(GrpcProvider, "grpc-provider", "Which gRPC implementation to use, if any") orelse .none;
 
     // Dependencies section
     // Benchmarks lib
@@ -68,6 +71,25 @@ pub fn build(b: *std.Build) !void {
         },
     });
 
+    const grpc_transport_mod = switch (grpc_provider) {
+        .none, .zig_grpc => b.createModule(.{
+            .root_source_file = b.path("src/grpc_transport_none.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .libgrpc => blk: {
+            const cgrpc_dep = b.lazyDependency("cgrpc_wrapper", .{}) orelse return;
+            break :blk b.createModule(.{
+                .root_source_file = b.path("src/grpc_transport_libgrpc.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "cgrpc_wrapper", .module = cgrpc_dep.module("cgrpc_wrapper") },
+                },
+            });
+        },
+    };
+
     // Modules section
     const sdk_mod = b.addModule("sdk", .{
         .root_source_file = b.path("src/sdk.zig"),
@@ -78,6 +100,7 @@ pub fn build(b: *std.Build) !void {
         .imports = &.{
             .{ .name = "protobuf", .module = protobuf_mod },
             .{ .name = "opentelemetry-proto", .module = otel_proto_mod },
+            .{ .name = "grpc_transport", .module = grpc_transport_mod },
         },
     });
 
