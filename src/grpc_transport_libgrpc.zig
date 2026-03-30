@@ -1,6 +1,5 @@
 const std = @import("std");
 const grpc = @import("cgrpc_wrapper");
-const otlp = @import("otlp.zig");
 
 const log = std.log.scoped(.grpc_transport);
 
@@ -33,20 +32,18 @@ pub fn send(
     const deadline: grpc.Deadline = .{ .duration = @as(i128, timeout_sec) * std.time.ns_per_s };
     switch (try grpc.client.rawUnaryCall(allocator, &channel, &queue, path, data, deadline)) {
         .success => |bytes| if (bytes) |b| allocator.free(b),
-        .grpc_error => |e| {
-            defer allocator.free(e.details);
-            log.err("gRPC error {}: {s}", .{ e.code, e.details });
-            return switch (e.code) {
+        .failure => |f| {
+            defer allocator.free(f.details);
+            log.err("gRPC error {}: {s}", .{ f.code, f.details });
+            return switch (f.toZigError()) {
                 // Retryable: server temporarily unavailable or rate-limited.
-                grpc.c.GRPC_STATUS_UNAVAILABLE,
-                grpc.c.GRPC_STATUS_RESOURCE_EXHAUSTED,
-                => otlp.ExportError.RequestEnqueuedForRetry,
-                else => otlp.ExportError.NonRetryableStatusCodeInResponse,
+                error.Unavailable, error.ResourceExhausted => error.RequestEnqueuedForRetry,
+                else => error.NonRetryableStatusCodeInResponse,
             };
         },
         .operation_failed => {
             log.err("gRPC batch operation failed (no status available)", .{});
-            return otlp.ExportError.NonRetryableStatusCodeInResponse;
+            return error.NonRetryableStatusCodeInResponse;
         },
         .timeout => return error.Timeout,
     }
