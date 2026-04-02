@@ -37,8 +37,9 @@
             .hash = "N-V-__8AAHGfRAD_mDFD4sWBe75WciDX0TKbL8zqRsON4c7x",
         },
         .cgrpc_wrapper = .{
-            .url = "git+https://github.com/agagniere/cgrpc_wrapper?ref=zig-0.15#bc0db6c0447215553380d329282bac6189d03fae",
-            .hash = "cgrpc_wrapper-0.1.2-O5w4NbKFAACtEzmf0_Iyyk_NnUcmYzsv1r8FB7txpU-6",
+            .url = "git+https://github.com/agagniere/cgrpc_wrapper?ref=zig-0.15#695ef4e8b995c0cf508f036a6cc159d7595a8388",
+            .hash = "cgrpc_wrapper-0.1.2-O5w4NbKFAADZyt80wXmKnFHXguwXkEAMYCOak8y4y6dU",
+            .lazy = true,
         },
     },
     .paths = .{
