@@ -788,13 +788,13 @@ pub fn Export(
     otlp_payload: Signal.Data,
 ) !void {
     const payload = otlp_payload.toOwnedSlice(allocator, config.protocol) catch |err| {
-        log.err("failed to encode payload: {}", .{err});
+        log.err("failed to encode payload: {t}", .{err});
         return err;
     };
     defer allocator.free(payload);
 
-    switch (config.protocol) {
-        .http_json, .http_protobuf => {
+    return switch (config.protocol) {
+        .http_json, .http_protobuf => blk: {
             // FIXME better polymorphism here.
             const http_client = try HTTPClient.init(allocator, config);
             defer http_client.deinit();
@@ -802,23 +802,14 @@ pub fn Export(
             const url = try config.httpUrlForSignal(otlp_payload.signal(), allocator);
             defer allocator.free(url);
 
-            http_client.send(url, payload) catch |err| {
-                switch (err) {
-                    ExportError.RequestEnqueuedForRetry => return err,
-                    else => {
-                        log.err("failed to send payload: {}", .{err});
-                        return err;
-                    },
-                }
-            };
+            break :blk http_client.send(url, payload);
         },
-        .grpc => {
-            grpc_transport.send(allocator, config.endpoint, config.timeout_sec, otlp_payload.signal().grpcPath(), payload) catch |err| {
-                log.err("failed to send grpc payload: {}", .{err});
-                return err;
-            };
-        },
-    }
+        .grpc => grpc_transport.send(allocator, config.endpoint, config.timeout_sec, otlp_payload.signal().grpcPath(), payload),
+    } catch |err| {
+        if (err != ExportError.RequestEnqueuedForRetry)
+            log.err("failed to send payload via {t}: {t}", .{ config.protocol, err });
+        return err;
+    };
 }
 
 pub fn ExportFile(
@@ -829,7 +820,7 @@ pub fn ExportFile(
     // We always want the JSON format for file export.
     // Single-line output for each entry is concatenated with newline before flushing.
     const payload = otlp_payload.toOwnedSlice(allocator, .http_json) catch |err| {
-        log.err("failed to encode payload to JSON: {}", .{err});
+        log.err("failed to encode payload to JSON: {t}", .{err});
         return err;
     };
     defer allocator.free(payload);
