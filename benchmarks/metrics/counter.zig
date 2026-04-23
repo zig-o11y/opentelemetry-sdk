@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 const metrics = sdk.metrics;
 const MeterProvider = metrics.MeterProvider;
@@ -9,7 +10,7 @@ threadlocal var thread_rng: ?std.Random.DefaultPrng = null;
 
 fn getThreadRng() *std.Random.DefaultPrng {
     if (thread_rng == null) {
-        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.timestamp())));
+        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(runtime.timestamp())));
     }
     return &thread_rng.?;
 }
@@ -85,7 +86,7 @@ test "Counter_Add_W/O_Attributes" {
     const without_attributes = struct {
         counter: *metrics.Counter(u64),
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             self.counter.add(1, .{}) catch @panic("counter add failed");
         }
     }{ .counter = counter };
@@ -95,10 +96,9 @@ test "Counter_Add_W/O_Attributes" {
 
     try bench.addParam("Counter_Add_Without_Attributes", &without_attributes, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Counter_Add_Sorted" {
@@ -126,7 +126,7 @@ test "Counter_Add_Sorted" {
         counter: *metrics.Counter(u64),
         random_pool: *RandomIndicesPool,
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const indices = self.random_pool.getNext();
 
             // Note: In Zig, attributes are already sorted by the SDK
@@ -141,10 +141,9 @@ test "Counter_Add_Sorted" {
 
     try bench.addParam("Counter_Add_Sorted", &sorted_bench, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Counter_Add_Unsorted" {
@@ -172,7 +171,7 @@ test "Counter_Add_Unsorted" {
         counter: *metrics.Counter(u64),
         random_pool: *RandomIndicesPool,
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const indices = self.random_pool.getNext();
 
             // Intentionally unsorted attribute order
@@ -187,11 +186,9 @@ test "Counter_Add_Unsorted" {
 
     try bench.addParam("Counter_Add_Unsorted", &unsorted_bench, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Counter_Add_Non_Static_Values" {
@@ -220,7 +217,7 @@ test "Counter_Add_Non_Static_Values" {
         allocator: std.mem.Allocator,
         random_pool: *RandomIndicesPool,
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const indices = self.random_pool.getNext();
 
             // Create dynamic strings
@@ -249,11 +246,9 @@ test "Counter_Add_Non_Static_Values" {
 
     try bench.addParam("Counter_Add_Non_Static_Values", &dynamic_bench, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Counter_Overflow" {
@@ -280,7 +275,7 @@ test "Counter_Overflow" {
         counter: *metrics.Counter(u64),
         iteration_counter: *std.atomic.Value(u32),
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             // Use atomic fetchAdd to get unique iteration number for each call
             const iteration = self.iteration_counter.fetchAdd(1, .monotonic);
 
@@ -299,11 +294,9 @@ test "Counter_Overflow" {
 
     try bench.addParam("Counter_Overflow", &overflow_bench, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Counter_Concurrent" {
@@ -325,16 +318,15 @@ test "Counter_Concurrent" {
     const concurrent_bench = ConcurrentCounterBench{ .counter = counter };
     try bench.addParam("Counter_Concurrent", &concurrent_bench, .{ .track_allocations = false });
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 const ConcurrentCounterBench = struct {
     counter: *metrics.Counter(u64),
 
-    pub fn run(self: @This(), _: std.mem.Allocator) void {
+    pub fn run(self: *@This(), _: std.mem.Allocator) void {
         const t1 = std.Thread.spawn(.{}, addWithAttrs, .{self.counter}) catch @panic("spawn failed");
         const t2 = std.Thread.spawn(.{}, addWithoutAttrs, .{self.counter}) catch @panic("spawn failed");
         const t3 = std.Thread.spawn(.{}, addWithDifferentAttrs, .{self.counter}) catch @panic("spawn failed");

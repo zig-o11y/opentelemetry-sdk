@@ -18,13 +18,13 @@ pub fn main() !void {
     };
 
     // 2. Create a tracer provider with the ID generator
-    var tracer_provider = try trace.TracerProvider.init(allocator, id_generator);
+    var tracer_provider = try trace.TracerProvider.init(allocator, runtime.io(), id_generator);
     defer tracer_provider.shutdown();
 
     // 3. Create a stdout exporter and simple processor for output
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_exporter = trace.StdOutExporter.init(std.Io.File.stdout().writer(runtime.io(), &stdout_buffer));
-    var simple_processor = trace.SimpleProcessor.init(allocator, stdout_exporter.asSpanExporter());
+    var simple_processor = trace.SimpleProcessor.init(allocator, runtime.io(), stdout_exporter.asSpanExporter());
 
     // 4. Add the processor to the provider
     try tracer_provider.addSpanProcessor(simple_processor.asSpanProcessor());

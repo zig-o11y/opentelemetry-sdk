@@ -35,7 +35,7 @@ fn testLogs(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) !void {
     const exporter = otlp_exporter.asLogRecordExporter();
 
     // Create a simple processor (exports immediately)
-    var simple_processor = logs_sdk.SimpleLogRecordProcessor.init(allocator, exporter);
+    var simple_processor = logs_sdk.SimpleLogRecordProcessor.init(allocator, runtime.io(), exporter);
     const processor = simple_processor.asLogRecordProcessor();
 
     // Create resource attributes
@@ -119,7 +119,7 @@ fn testLogsWithCompression(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) !v
     const exporter = otlp_exporter.asLogRecordExporter();
 
     // Create a simple processor
-    var simple_processor = logs_sdk.SimpleLogRecordProcessor.init(allocator, exporter);
+    var simple_processor = logs_sdk.SimpleLogRecordProcessor.init(allocator, runtime.io(), exporter);
     const processor = simple_processor.asLogRecordProcessor();
 
     // Create resource attributes with compression indicator

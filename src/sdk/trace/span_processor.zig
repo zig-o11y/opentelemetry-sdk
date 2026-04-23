@@ -4,6 +4,8 @@ const trace = @import("../../api/trace.zig");
 const context = @import("../../api/context.zig");
 const SpanExporter = @import("span_exporter.zig").SpanExporter;
 const InstrumentationScope = @import("../../scope.zig").InstrumentationScope;
+const attribute = @import("../../attributes.zig");
+const SpanAttributes = std.StringArrayHashMapUnmanaged(attribute.AttributeValue);
 
 /// SpanProcessor is responsible for processing spans as they are started and ended.
 pub const SpanProcessor = struct {
@@ -45,14 +47,16 @@ pub const SimpleProcessor = struct {
     allocator: std.mem.Allocator,
     exporter: SpanExporter,
     mutex: std.Io.Mutex,
+    io: std.Io,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, exporter: SpanExporter) Self {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, exporter: SpanExporter) Self {
         return Self{
             .allocator = allocator,
             .exporter = exporter,
             .mutex = std.Io.Mutex.init,
+            .io = io,
         };
     }
 
@@ -75,11 +79,8 @@ pub const SimpleProcessor = struct {
     fn onEnd(ctx: *anyopaque, span: trace.Span) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
 
-        // Only process recording spans
-        if (!span.is_recording) return;
-
-        self.mutex.lockUncancelable(runtime.io());
-        defer self.mutex.unlock(runtime.io());
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         // Export the single span
         var spans = [_]trace.Span{span};
@@ -90,8 +91,8 @@ pub const SimpleProcessor = struct {
 
     fn shutdown(ctx: *anyopaque) anyerror!void {
         const self: *Self = @ptrCast(@alignCast(ctx));
-        self.mutex.lockUncancelable(runtime.io());
-        defer self.mutex.unlock(runtime.io());
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         // Shutdown is handled by the exporter
         return;
     }
@@ -117,7 +118,8 @@ pub const BatchingProcessor = struct {
     queue: std.ArrayList(trace.Span),
     mutex: std.Io.Mutex,
     wake: std.Io.Event,
-    export_thread: ?std.Thread,
+    io: std.Io,
+    export_task: ?std.Io.Future(void),
     should_shutdown: std.atomic.Value(bool),
 
     const Self = @This();
@@ -129,7 +131,7 @@ pub const BatchingProcessor = struct {
         max_export_batch_size: usize = 512,
     };
 
-    pub fn init(allocator: std.mem.Allocator, exporter: SpanExporter, config: Config) !*Self {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, exporter: SpanExporter, config: Config) !*Self {
         const self = try allocator.create(Self);
         self.* = Self{
             .allocator = allocator,
@@ -141,19 +143,23 @@ pub const BatchingProcessor = struct {
             .queue = std.ArrayList(trace.Span).empty,
             .mutex = std.Io.Mutex.init,
             .wake = .unset,
-            .export_thread = null,
+            .io = io,
+            .export_task = null,
             .should_shutdown = std.atomic.Value(bool).init(false),
         };
 
-        // Start the export thread
-        self.export_thread = try std.Thread.spawn(.{}, exportLoop, .{self});
+        // Start the background export task using io.concurrent
+        self.export_task = try io.concurrent(exportLoop, .{self});
 
         return self;
     }
 
     pub fn deinit(self: *Self) void {
         // Shutdown should have been called before deinit
-        std.debug.assert(self.export_thread == null);
+        std.debug.assert(self.export_task == null);
+        for (self.queue.items) |*span| {
+            span.deinit();
+        }
         self.queue.deinit(self.allocator);
         self.allocator.destroy(self);
     }
@@ -177,11 +183,8 @@ pub const BatchingProcessor = struct {
     fn onEnd(ctx: *anyopaque, span: trace.Span) void {
         const self: *Self = @ptrCast(@alignCast(ctx));
 
-        // Only process recording spans
-        if (!span.is_recording) return;
-
-        self.mutex.lockUncancelable(runtime.io());
-        defer self.mutex.unlock(runtime.io());
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         // If queue is full, drop the span
         if (self.queue.items.len >= self.max_queue_size) {
@@ -189,15 +192,22 @@ pub const BatchingProcessor = struct {
             return;
         }
 
+        const queued_span = cloneSpan(self.allocator, span) catch {
+            std.log.err("BatchingProcessor failed to copy span for queue", .{});
+            return;
+        };
+
         // Add span to queue
-        self.queue.append(self.allocator, span) catch {
+        self.queue.append(self.allocator, queued_span) catch {
             std.log.err("BatchingProcessor failed to add span to queue", .{});
+            var owned_span = queued_span;
+            owned_span.deinit();
             return;
         };
 
         // Check if we should trigger an export
         if (self.queue.items.len >= self.max_export_batch_size) {
-            self.wake.set(runtime.io());
+            self.wake.set(self.io);
         }
     }
 
@@ -207,21 +217,18 @@ pub const BatchingProcessor = struct {
         // Signal shutdown
         self.should_shutdown.store(true, .release);
 
-        // Wake up the export thread
-        self.wake.set(runtime.io());
-
-        // Wait for the export thread to finish
-        if (self.export_thread) |thread| {
-            thread.join();
-            self.export_thread = null;
+        // Cancel the background task (unblocks its wait and waits for it to finish)
+        if (self.export_task) |*task| {
+            task.cancel(self.io);
+            self.export_task = null;
         }
     }
 
     fn forceFlush(ctx: *anyopaque) anyerror!void {
         const self: *Self = @ptrCast(@alignCast(ctx));
 
-        self.mutex.lockUncancelable(runtime.io());
-        defer self.mutex.unlock(runtime.io());
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         // Export all pending spans
         if (self.queue.items.len > 0) {
@@ -231,12 +238,12 @@ pub const BatchingProcessor = struct {
 
     fn exportLoop(self: *Self) void {
         while (true) {
-            self.mutex.lockUncancelable(runtime.io());
+            self.mutex.lockUncancelable(self.io);
             if (self.should_shutdown.load(.acquire)) {
                 if (self.queue.items.len > 0) {
                     self.exportBatch();
                 }
-                self.mutex.unlock(runtime.io());
+                self.mutex.unlock(self.io);
                 break;
             }
             // Only arm the wait if we don't already have a full batch ready.
@@ -246,17 +253,17 @@ pub const BatchingProcessor = struct {
             // scheduled_delay_millis even though a batch is queued.
             const should_wait = self.queue.items.len < self.max_export_batch_size;
             if (should_wait) self.wake.reset();
-            self.mutex.unlock(runtime.io());
+            self.mutex.unlock(self.io);
 
             if (should_wait) {
-                _ = self.wake.waitTimeout(runtime.io(), runtime.timeoutAfterMs(self.scheduled_delay_millis)) catch {};
+                _ = self.wake.waitTimeout(self.io, runtime.timeoutAfterMs(self.scheduled_delay_millis)) catch {};
             }
 
-            self.mutex.lockUncancelable(runtime.io());
+            self.mutex.lockUncancelable(self.io);
             if (self.queue.items.len > 0) {
                 self.exportBatch();
             }
-            self.mutex.unlock(runtime.io());
+            self.mutex.unlock(self.io);
         }
     }
 
@@ -267,7 +274,8 @@ pub const BatchingProcessor = struct {
         const batch_size = @min(self.queue.items.len, self.max_export_batch_size);
         const spans_to_export = self.queue.items[0..batch_size];
 
-        // Make a copy of the spans to export (since the exporter might take ownership)
+        // Make a copy of the queued span handles so the queue can be compacted
+        // before calling the exporter.
         const export_spans = self.allocator.alloc(trace.Span, batch_size) catch {
             std.log.err("BatchingProcessor failed to allocate memory for export batch", .{});
             return;
@@ -281,12 +289,60 @@ pub const BatchingProcessor = struct {
         self.queue.shrinkRetainingCapacity(self.queue.items.len - batch_size);
 
         // Export the batch (unlock mutex during export)
-        self.mutex.unlock(runtime.io());
-        defer self.mutex.lockUncancelable(runtime.io());
+        self.mutex.unlock(self.io);
+        defer self.mutex.lockUncancelable(self.io);
+        defer for (export_spans) |*span| {
+            span.deinit();
+        };
 
         self.exporter.exportSpans(export_spans) catch |err| {
             std.log.err("BatchingProcessor failed to export span batch: {}", .{err});
         };
+    }
+
+    fn cloneAttributes(
+        allocator: std.mem.Allocator,
+        source: SpanAttributes,
+    ) !SpanAttributes {
+        var result: SpanAttributes = .empty;
+        errdefer result.deinit(allocator);
+
+        try result.ensureTotalCapacity(allocator, source.count());
+        for (source.keys(), source.values()) |key, value| {
+            try result.put(allocator, key, value);
+        }
+
+        return result;
+    }
+
+    fn cloneSpan(allocator: std.mem.Allocator, span: trace.Span) !trace.Span {
+        var result = trace.Span.init(allocator, span.span_context, span.name, span.kind, span.scope);
+        errdefer result.deinit();
+
+        result.start_time_unix_nano = span.start_time_unix_nano;
+        result.end_time_unix_nano = span.end_time_unix_nano;
+        result.status = span.status;
+        result.is_recording = span.is_recording;
+
+        result.attributes = try cloneAttributes(allocator, span.attributes);
+
+        try result.events.ensureTotalCapacity(allocator, span.events.items.len);
+        for (span.events.items) |event| {
+            var cloned_event = trace.Span.Event.init(allocator, event.name, event.timestamp);
+            errdefer cloned_event.deinit();
+            cloned_event.attributes = try cloneAttributes(allocator, event.attributes);
+            result.events.appendAssumeCapacity(cloned_event);
+        }
+
+        try result.links.ensureTotalCapacity(allocator, span.links.items.len);
+        for (span.links.items) |link| {
+            var cloned_link = trace.Span.Link.init(allocator, link.span_context);
+            errdefer cloned_link.deinit();
+            cloned_link.attributes = try cloneAttributes(allocator, link.attributes);
+            result.links.appendAssumeCapacity(cloned_link);
+        }
+
+        return result;
     }
 };
 
@@ -331,7 +387,7 @@ test "SimpleProcessor basic functionality" {
     defer mock_exporter.deinit();
 
     const exporter = mock_exporter.asSpanExporter();
-    var processor = SimpleProcessor.init(allocator, exporter);
+    var processor = SimpleProcessor.init(allocator, runtime.io(), exporter);
     const span_processor = processor.asSpanProcessor();
 
     // Create a test span
@@ -397,7 +453,7 @@ test "BatchingProcessor basic functionality" {
     defer mock_exporter.deinit();
 
     const exporter = mock_exporter.asSpanExporter();
-    var processor = try BatchingProcessor.init(allocator, exporter, .{
+    var processor = try BatchingProcessor.init(allocator, runtime.io(), exporter, .{
         .max_export_batch_size = 2, // Small batch size for testing
         .scheduled_delay_millis = 100, // Short delay for testing
     });

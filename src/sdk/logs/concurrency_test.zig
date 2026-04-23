@@ -454,6 +454,7 @@ test "batching processor concurrency" {
     var mock_exporter = MockExporter.init();
     var batching_processor = try BatchingLogRecordProcessor.init(
         std.testing.allocator,
+        runtime.io(),
         mock_exporter.asLogRecordExporter(),
         .{
             .max_queue_size = 1000,

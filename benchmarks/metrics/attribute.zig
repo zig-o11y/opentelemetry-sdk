@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 const metrics = sdk.metrics;
 const MeterProvider = metrics.MeterProvider;
@@ -35,17 +36,16 @@ test "AddNoAttrs" {
 
     const no_attrs = struct {
         counter: *metrics.Counter(u64),
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             self.counter.add(1, .{}) catch @panic("counter add failed");
         }
     }{ .counter = counter };
 
     try bench.addParam("AddNoAttrs", &no_attrs, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "AddOneAttr" {
@@ -65,7 +65,7 @@ test "AddOneAttr" {
 
     const one_attr = struct {
         counter: *metrics.Counter(u64),
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const val1: []const u8 = "value1";
             self.counter.add(1, .{
                 "key1", val1,
@@ -75,10 +75,9 @@ test "AddOneAttr" {
 
     try bench.addParam("AddOneAttr", &one_attr, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "AddThreeAttr" {
@@ -98,7 +97,7 @@ test "AddThreeAttr" {
 
     const three_attr = struct {
         counter: *metrics.Counter(u64),
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const val1: []const u8 = "value1";
             const val2: []const u8 = "value2";
             const val3: []const u8 = "value3";
@@ -112,10 +111,9 @@ test "AddThreeAttr" {
 
     try bench.addParam("AddThreeAttr", &three_attr, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "AddFiveAttr" {
@@ -135,7 +133,7 @@ test "AddFiveAttr" {
 
     const five_attr = struct {
         counter: *metrics.Counter(u64),
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const val1: []const u8 = "value1";
             const val2: []const u8 = "value2";
             const val3: []const u8 = "value3";
@@ -153,10 +151,9 @@ test "AddFiveAttr" {
 
     try bench.addParam("AddFiveAttr", &five_attr, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "AddTenAttr" {
@@ -176,7 +173,7 @@ test "AddTenAttr" {
 
     const ten_attr = struct {
         counter: *metrics.Counter(u64),
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const val01: []const u8 = "value01";
             const val02: []const u8 = "value02";
             const val03: []const u8 = "value03";
@@ -204,10 +201,9 @@ test "AddTenAttr" {
 
     try bench.addParam("AddTenAttr", &ten_attr, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 // Histogram benchmarks with varying bucket counts
@@ -240,7 +236,7 @@ test "RecordHistogram10Bounds" {
 
     const hist_bench = struct {
         histogram: *metrics.Histogram(f64),
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const status: []const u8 = "ok";
             const method: []const u8 = "GET";
             self.histogram.record(25.0, .{
@@ -252,10 +248,9 @@ test "RecordHistogram10Bounds" {
 
     try bench.addParam("RecordHistogram10Bounds", &hist_bench, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "RecordHistogram50Bounds" {
@@ -293,7 +288,7 @@ test "RecordHistogram50Bounds" {
 
     const hist_bench = struct {
         histogram: *metrics.Histogram(f64),
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const status: []const u8 = "ok";
             const method: []const u8 = "GET";
             self.histogram.record(25.0, .{
@@ -305,10 +300,9 @@ test "RecordHistogram50Bounds" {
 
     try bench.addParam("RecordHistogram50Bounds", &hist_bench, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 // Benchmark for single-use attributes
@@ -330,9 +324,9 @@ test "AddSingleUseAttrs" {
     const single_use = struct {
         counter: *metrics.Counter(u64),
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             // Use timestamp to create unique attribute value for each iteration
-            const ts = std.time.timestamp();
+            const ts = runtime.timestamp();
 
             // Create unique attribute value for each iteration
             var buf: [32]u8 = undefined;
@@ -346,10 +340,9 @@ test "AddSingleUseAttrs" {
 
     try bench.addParam("AddSingleUseAttrs", &single_use, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 // Gauge benchmark with varying values
@@ -371,9 +364,9 @@ test "GaugeRecordVaried" {
     const gauge_varied = struct {
         gauge: *metrics.Gauge(f64),
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             // Simulate CPU usage between 0% and 100%
-            var rng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.timestamp())));
+            var rng = std.Random.DefaultPrng.init(@as(u64, @intCast(runtime.timestamp())));
             const value = rng.random().float(f64) * 100.0;
 
             const cpu: []const u8 = "cpu0";
@@ -387,8 +380,7 @@ test "GaugeRecordVaried" {
 
     try bench.addParam("GaugeRecordVaried", &gauge_varied, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }

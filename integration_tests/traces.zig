@@ -37,7 +37,7 @@ fn testTraces(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) !void {
     };
 
     // Create tracer provider
-    var tracer_provider = try trace_sdk.TracerProvider.init(allocator, id_generator);
+    var tracer_provider = try trace_sdk.TracerProvider.init(allocator, runtime.io(), id_generator);
     errdefer tracer_provider.shutdown();
 
     // Create OTLP exporter and processor
@@ -47,6 +47,7 @@ fn testTraces(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) !void {
     // Use simple processor for integration tests to ensure immediate export
     var simple_processor = trace_sdk.SimpleProcessor.init(
         allocator,
+        runtime.io(),
         otlp_exporter.asSpanExporter(),
     );
 
@@ -133,7 +134,7 @@ fn testTracesWithCompression(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) 
     };
 
     // Create tracer provider
-    var tracer_provider = try trace_sdk.TracerProvider.init(allocator, id_generator);
+    var tracer_provider = try trace_sdk.TracerProvider.init(allocator, runtime.io(), id_generator);
     errdefer tracer_provider.shutdown();
 
     // Create OTLP exporter with compression enabled
@@ -143,6 +144,7 @@ fn testTracesWithCompression(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) 
     // Use simple processor for integration tests
     var simple_processor = trace_sdk.SimpleProcessor.init(
         allocator,
+        runtime.io(),
         otlp_exporter.asSpanExporter(),
     );
 

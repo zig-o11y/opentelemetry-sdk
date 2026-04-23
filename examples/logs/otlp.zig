@@ -29,7 +29,7 @@ pub fn main() !void {
 
     // Create a simple processor (exports immediately)
     // For production, consider using BatchingLogRecordProcessor instead
-    var simple_processor = sdk.logs.SimpleLogRecordProcessor.init(allocator, exporter);
+    var simple_processor = sdk.logs.SimpleLogRecordProcessor.init(allocator, runtime.io(), exporter);
     const processor = simple_processor.asLogRecordProcessor();
 
     // Create resource attributes to identify this service

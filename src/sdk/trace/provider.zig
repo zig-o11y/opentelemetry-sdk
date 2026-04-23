@@ -51,8 +51,9 @@ pub const TracerProvider = struct {
     sdk_disabled: bool,
     // Resource attributes for this provider
     resource: ?[]const Attribute,
+    io: std.Io,
 
-    pub fn init(allocator: std.mem.Allocator, id_generator: IDGenerator) !*Self {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, id_generator: IDGenerator) !*Self {
         // Access global configuration (transparent to user)
         const cfg = Configuration.get();
         const sdk_disabled = if (cfg) |c| c.sdk_disabled else false;
@@ -73,6 +74,7 @@ pub const TracerProvider = struct {
             .sdk_disabled = sdk_disabled,
             .config = cfg,
             .resource = if (sdk_disabled) null else if (cfg) |c| try resource_attributes.buildFromConfig(allocator, c) else null,
+            .io = io,
         };
 
         if (sdk_disabled) {
@@ -89,7 +91,7 @@ pub const TracerProvider = struct {
         exporter: SpanExporter,
     ) !*BatchingProcessor {
         const tc = self.config.?.trace_config;
-        return try BatchingProcessor.init(self.allocator, exporter, .{
+        return try BatchingProcessor.init(self.allocator, self.io, exporter, .{
             .max_queue_size = @intCast(tc.bsp_max_queue_size),
             .scheduled_delay_millis = tc.bsp_schedule_delay_ms,
             .export_timeout_millis = tc.bsp_export_timeout_ms,
@@ -109,6 +111,8 @@ pub const TracerProvider = struct {
         if (self.resource) |res| {
             resource_attributes.freeResource(self.allocator, res);
         }
+
+        self.allocator.destroy(self);
     }
 
     /// Get the TracerProvider interface for this implementation
@@ -134,8 +138,8 @@ pub const TracerProvider = struct {
             return error.TracerProviderShutdown;
         }
 
-        self.mutex.lockUncancelable(runtime.io());
-        defer self.mutex.unlock(runtime.io());
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         try self.processors.append(self.allocator, processor);
     }
@@ -146,8 +150,8 @@ pub const TracerProvider = struct {
             return error.TracerProviderShutdown;
         }
 
-        self.mutex.lockUncancelable(runtime.io());
-        defer self.mutex.unlock(runtime.io());
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         // Check if we already have a Tracer for this scope
         if (self.tracers.get(scope)) |existing_tracer| {
@@ -170,7 +174,7 @@ pub const TracerProvider = struct {
             return; // Already shutdown
         }
 
-        self.mutex.lockUncancelable(runtime.io());
+        self.mutex.lockUncancelable(self.io);
 
         // Shutdown all processors
         for (self.processors.items) |processor| {
@@ -195,7 +199,7 @@ pub const TracerProvider = struct {
         }
 
         // Unlock before destroying the struct
-        self.mutex.unlock(runtime.io());
+        self.mutex.unlock(self.io);
 
         // Destroy self
         self.allocator.destroy(self);
@@ -207,8 +211,8 @@ pub const TracerProvider = struct {
             return error.TracerProviderShutdown;
         }
 
-        self.mutex.lockUncancelable(runtime.io());
-        defer self.mutex.unlock(runtime.io());
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         for (self.processors.items) |processor| {
             try processor.forceFlush();
@@ -219,8 +223,8 @@ pub const TracerProvider = struct {
     pub fn onSpanStart(self: *Self, span: *trace_api.Span, parent_context: context.Context) void {
         if (self.sdk_disabled or self.is_shutdown.load(.acquire)) return;
 
-        self.mutex.lockUncancelable(runtime.io());
-        defer self.mutex.unlock(runtime.io());
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         for (self.processors.items) |processor| {
             processor.onStart(span, parent_context);
@@ -231,8 +235,8 @@ pub const TracerProvider = struct {
     pub fn onSpanEnd(self: *Self, span: trace_api.Span) void {
         if (self.sdk_disabled or self.is_shutdown.load(.acquire)) return;
 
-        self.mutex.lockUncancelable(runtime.io());
-        defer self.mutex.unlock(runtime.io());
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         for (self.processors.items) |processor| {
             processor.onEnd(span);
@@ -357,8 +361,8 @@ pub const Tracer = struct {
 
     /// End a span - this should be called when the span is completed
     pub fn endSpan(self: Self, span: *trace_api.Span) void {
-        defer span.end(null);
         if (!span.is_recording) return;
+        span.end(null);
 
         // Notify processors that the span has ended
         self.provider.onSpanEnd(span.*);
@@ -373,7 +377,7 @@ test "TracerProvider basic functionality" {
     var default_prng = std.Random.DefaultPrng.init(seed);
     const random_generator = RandomIDGenerator.init(default_prng.random());
 
-    var provider = try TracerProvider.init(allocator, IDGenerator{ .Random = random_generator });
+    var provider = try TracerProvider.init(allocator, runtime.io(), IDGenerator{ .Random = random_generator });
     defer provider.shutdown(); // Use shutdown to properly destroy the provider
 
     // Get a tracer via the interface
@@ -440,7 +444,7 @@ test "TracerProvider with processors" {
     var default_prng = std.Random.DefaultPrng.init(seed);
     const random_generator = RandomIDGenerator.init(default_prng.random());
 
-    var provider = try TracerProvider.init(allocator, IDGenerator{ .Random = random_generator });
+    var provider = try TracerProvider.init(allocator, runtime.io(), IDGenerator{ .Random = random_generator });
     defer provider.shutdown(); // Use shutdown to properly destroy the provider
 
     // Add a mock processor
@@ -471,7 +475,7 @@ test "TracerProvider with config from environment" {
     var default_prng = std.Random.DefaultPrng.init(seed);
     const random_generator = RandomIDGenerator.init(default_prng.random());
 
-    var provider = try TracerProvider.init(allocator, IDGenerator{ .Random = random_generator });
+    var provider = try TracerProvider.init(allocator, runtime.io(), IDGenerator{ .Random = random_generator });
     defer provider.shutdown();
 
     // Verify config was loaded with defaults
@@ -488,7 +492,7 @@ test "TracerProvider end span with links and events" {
     var default_prng = std.Random.DefaultPrng.init(seed);
     const random_generator = RandomIDGenerator.init(default_prng.random());
 
-    var provider = try TracerProvider.init(allocator, IDGenerator{ .Random = random_generator });
+    var provider = try TracerProvider.init(allocator, runtime.io(), IDGenerator{ .Random = random_generator });
     defer provider.shutdown(); // Use shutdown to properly destroy the provider
 
     // Get a tracer via the interface

@@ -24,7 +24,7 @@ pub fn main() !void {
     const exporter = stdout_exporter.asLogRecordExporter();
 
     // Create a batching processor (more realistic for production)
-    var batch_processor = try sdk.logs.BatchingLogRecordProcessor.init(allocator, exporter, .{
+    var batch_processor = try sdk.logs.BatchingLogRecordProcessor.init(allocator, runtime.io(), exporter, .{
         .max_queue_size = 100,
         .scheduled_delay_millis = 1000,
         .max_export_batch_size = 10,

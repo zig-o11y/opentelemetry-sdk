@@ -16,7 +16,7 @@ pub fn main() !void {
     const exporter = stdout_exporter.asLogRecordExporter();
 
     // Create a batching processor with custom config
-    var batching_processor = try sdk.logs.BatchingLogRecordProcessor.init(allocator, exporter, .{
+    var batching_processor = try sdk.logs.BatchingLogRecordProcessor.init(allocator, runtime.io(), exporter, .{
         .max_queue_size = 1024,
         .max_export_batch_size = 5, // Export every 5 logs
         .scheduled_delay_millis = 1000, // Or every 1 second

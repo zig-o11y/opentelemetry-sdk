@@ -243,7 +243,7 @@ pub fn tracerProviderCreate() callconv(.c) ?*OtelTracerProvider {
     const random_generator = RandomIDGenerator.init(prng_ptr.random());
     const id_generator = IDGenerator{ .Random = random_generator };
 
-    const provider = TracerProvider.init(allocator, id_generator) catch {
+    const provider = TracerProvider.init(allocator, runtime.io(), id_generator) catch {
         allocator.destroy(prng_ptr);
         return null;
     };
@@ -673,7 +673,7 @@ pub fn simpleSpanProcessorCreate(exporter: ?*OtelSpanExporter) callconv(.c) ?*Ot
     const exp: *SpanExporter = @ptrCast(@alignCast(e));
 
     const storage = allocator.create(SimpleProcessor) catch return null;
-    storage.* = SimpleProcessor.init(allocator, exp.*);
+    storage.* = SimpleProcessor.init(allocator, runtime.io(), exp.*);
 
     const processor_ptr = allocator.create(SpanProcessor) catch {
         allocator.destroy(storage);

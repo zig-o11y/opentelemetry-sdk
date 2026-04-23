@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 const metrics = sdk.metrics;
 const MeterProvider = metrics.MeterProvider;
@@ -17,10 +18,9 @@ test "ObservableCounter_Create" {
 
     try bench.add("ObservableCounter_Create", ObservableCounterBench.run, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 const ObservableCounterBench = struct {
@@ -47,10 +47,9 @@ test "ObservableUpDownCounter_Create" {
 
     try bench.add("ObservableUpDownCounter_Create", ObservableUpDownBench.run, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 const ObservableUpDownBench = struct {
@@ -76,10 +75,9 @@ test "ObservableGauge_Create" {
 
     try bench.add("ObservableGauge_Create", ObservableGaugeBench.run, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 const ObservableGaugeBench = struct {

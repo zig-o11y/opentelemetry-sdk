@@ -718,7 +718,7 @@ test "Configuration TracerProvider with SDK disabled" {
     const random_generator = RandomIDGenerator.init(default_prng.random());
     const id_gen = IDGenerator{ .Random = random_generator };
 
-    var provider = try TracerProvider.init(allocator, id_gen);
+    var provider = try TracerProvider.init(allocator, runtime.io(), id_gen);
     defer provider.deinit();
     defer allocator.destroy(provider);
 
@@ -811,7 +811,7 @@ test "Configuration SDK disabled with OTEL_SDK_DISABLED=false" {
     const random_generator = RandomIDGenerator.init(default_prng.random());
     const id_gen = IDGenerator{ .Random = random_generator };
 
-    var tracer_provider = try TracerProvider.init(allocator, id_gen);
+    var tracer_provider = try TracerProvider.init(allocator, runtime.io(), id_gen);
     defer tracer_provider.deinit();
     defer allocator.destroy(tracer_provider);
 

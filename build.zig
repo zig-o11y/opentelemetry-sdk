@@ -322,9 +322,18 @@ fn buildBenchmarks(
                 },
             });
 
+            // Provide dummy test_options so the custom test runner compiles
+            const benchmark_test_options = b.addOptions();
+            benchmark_test_options.addOption(bool, "verbose", false);
+            benchmark_test_options.addOption(bool, "fail_first", false);
+            benchmark_test_options.addOption(bool, "show_logs", false);
+            b_mod.addOptions("test_options", benchmark_test_options);
+
             const test_step = b.addTest(.{
                 .name = name,
                 .root_module = b_mod,
+                // Use custom test runner to avoid server protocol (--listen=-)
+                .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
                 // Allow passing benchmark filter using the build args.
                 .filters = b.args orelse &[0][]const u8{},
             });

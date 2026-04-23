@@ -257,7 +257,7 @@ pub const LoggerProvider = struct {
         exporter: LogRecordExporter,
     ) !*BatchingLogRecordProcessor {
         const lc = self.config.?.logs_config;
-        return try BatchingLogRecordProcessor.init(self.allocator, exporter, .{
+        return try BatchingLogRecordProcessor.init(self.allocator, runtime.io(), exporter, .{
             .max_queue_size = @intCast(lc.blrp_max_queue_size),
             .scheduled_delay_millis = lc.blrp_schedule_delay_ms,
             .export_timeout_millis = lc.blrp_export_timeout_ms,
@@ -426,7 +426,7 @@ test "LoggerProvider with processor" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, exporter);
+    var processor = SimpleLogRecordProcessor.init(allocator, runtime.io(), exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     var provider = try LoggerProvider.init(allocator, null);
@@ -503,7 +503,7 @@ test "Logger log records inherit resource from provider" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, exporter);
+    var processor = SimpleLogRecordProcessor.init(allocator, runtime.io(), exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     var provider = try LoggerProvider.init(allocator, resource_attrs);
@@ -545,7 +545,7 @@ test "Logger.enabled() returns true with active processors" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, exporter);
+    var processor = SimpleLogRecordProcessor.init(allocator, runtime.io(), exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     var provider = try LoggerProvider.init(allocator, null);
@@ -601,7 +601,7 @@ test "Logger.enabled() returns false after shutdown" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, exporter);
+    var processor = SimpleLogRecordProcessor.init(allocator, runtime.io(), exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     var provider = try LoggerProvider.init(allocator, null);

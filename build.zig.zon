@@ -24,8 +24,8 @@
     // internet connectivity.
     .dependencies = .{
         .zbench = .{
-            .url = "git+https://github.com/hendriknielaender/zBench?ref=v0.11.2#2bdf0c62c5bf761d282e889e34fb33bc41484e6f",
-            .hash = "zbench-0.11.2-YTdc7zolAQDlBF9i0ywXIvDjafL3Kg27S-aFUq6dU5zy",
+            .url = "git+https://github.com/hendriknielaender/zBench?ref=v0.13.0#b2b89c475e3ef1bb2bd71255c80478a82d3e0ca8",
+            .hash = "zbench-0.13.0-YTdc7xVBAQCCMC-IdLLuotBeiNNNm8k9Pi2V4VYqrwfI",
         },
         .opentelemetry_proto = .{
             .url = "git+https://github.com/zig-o11y/opentelemetry-proto?ref=main#c43bd4c4db96fd839c594b7b701b44866b19457e",

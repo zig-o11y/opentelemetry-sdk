@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const zbench = @import("benchmark");
 
 const sdk = @import("opentelemetry-sdk");
@@ -17,7 +18,7 @@ threadlocal var thread_rng: ?std.Random.DefaultPrng = null;
 
 fn getThreadRng() *std.Random.DefaultPrng {
     if (thread_rng == null) {
-        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.timestamp())));
+        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(runtime.timestamp())));
     }
     return &thread_rng.?;
 }
@@ -41,9 +42,9 @@ const BenchmarkContext = struct {
         const ctx = try allocator.create(BenchmarkContext);
         errdefer allocator.destroy(ctx);
 
-        ctx.buffer = std.ArrayList(u8){};
-        ctx.exporter = InMemoryExporter.init(ctx.buffer.writer(allocator));
-        ctx.processor = SimpleLogRecordProcessor.init(allocator, ctx.exporter.asLogRecordExporter());
+        ctx.buffer = std.ArrayList(u8).empty;
+        ctx.exporter = InMemoryExporter.init(.fromArrayList(allocator, &ctx.buffer));
+        ctx.processor = SimpleLogRecordProcessor.init(allocator, runtime.io(), ctx.exporter.asLogRecordExporter());
 
         ctx.provider = try LoggerProvider.init(allocator, null);
         errdefer ctx.provider.deinit();
@@ -55,7 +56,7 @@ const BenchmarkContext = struct {
 
     fn deinit(self: *BenchmarkContext, allocator: std.mem.Allocator) void {
         self.provider.deinit();
-        self.buffer.deinit(allocator);
+        self.exporter.writer.deinit();
         allocator.destroy(self);
     }
 };
@@ -95,7 +96,7 @@ test "Logger_Emit_W/O_Attributes" {
         logger: *Logger,
 
         pub fn setup(_: @This(), _: std.mem.Allocator) void {}
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             self.logger.emit(9, "INFO", "test log message", null);
         }
         pub fn teardown(_: @This(), _: std.mem.Allocator) void {}
@@ -106,10 +107,9 @@ test "Logger_Emit_W/O_Attributes" {
 
     try bench.addParam("Logger_Emit_Without_Attributes", &without_attributes, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Logger_Emit_With_Attributes" {
@@ -125,7 +125,7 @@ test "Logger_Emit_With_Attributes" {
         logger: *Logger,
         attrs: [5]Attribute,
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             self.logger.emit(9, "INFO", "test log message", &self.attrs);
         }
     }{
@@ -144,10 +144,9 @@ test "Logger_Emit_With_Attributes" {
 
     try bench.addParam("Logger_Emit_With_Attributes", &with_attributes, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Logger_Emit_Different_Severities" {
@@ -168,7 +167,7 @@ test "Logger_Emit_Different_Severities" {
         severity_levels: [6]u8,
         counter: *std.atomic.Value(u32),
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const idx = self.counter.fetchAdd(1, .monotonic) % self.severity_levels.len;
             const severity = self.severity_levels[idx];
             const severity_text = switch (severity) {
@@ -193,10 +192,9 @@ test "Logger_Emit_Different_Severities" {
 
     try bench.addParam("Logger_Emit_Different_Severities", &severities, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Logger_Emit_Small_Body" {
@@ -211,7 +209,7 @@ test "Logger_Emit_Small_Body" {
     const small_body = struct {
         logger: *Logger,
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             self.logger.emit(9, "INFO", "OK", null);
         }
     }{ .logger = logger };
@@ -221,10 +219,9 @@ test "Logger_Emit_Small_Body" {
 
     try bench.addParam("Logger_Emit_Small_Body", &small_body, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Logger_Emit_Large_Body" {
@@ -245,7 +242,7 @@ test "Logger_Emit_Large_Body" {
         logger: *Logger,
         message: []const u8,
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             self.logger.emit(9, "INFO", self.message, null);
         }
     }{
@@ -258,10 +255,9 @@ test "Logger_Emit_Large_Body" {
 
     try bench.addParam("Logger_Emit_Large_Body", &large_body, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Logger_Emit_With_Many_Attributes" {
@@ -277,7 +273,7 @@ test "Logger_Emit_With_Many_Attributes" {
         logger: *Logger,
         attrs: [10]Attribute,
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             self.logger.emit(9, "INFO", "test log with many attributes", &self.attrs);
         }
     }{
@@ -301,10 +297,9 @@ test "Logger_Emit_With_Many_Attributes" {
 
     try bench.addParam("Logger_Emit_With_Many_Attributes", &many_attributes, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Logger_Concurrent_Emission" {
@@ -326,7 +321,7 @@ test "Logger_Concurrent_Emission" {
     const concurrent_logs = struct {
         logger: *Logger,
 
-        pub fn run(self: @This(), allocator: std.mem.Allocator) void {
+        pub fn run(self: *@This(), allocator: std.mem.Allocator) void {
             const thread_count = 4;
             const threads = allocator.alloc(std.Thread, thread_count) catch return;
             defer allocator.free(threads);
@@ -358,10 +353,9 @@ test "Logger_Concurrent_Emission" {
 
     try bench.addParam("Logger_Concurrent_Emission", &concurrent_logs, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Logger_GetLogger_Same_Scope" {
@@ -377,7 +371,7 @@ test "Logger_GetLogger_Same_Scope" {
         provider: *LoggerProvider,
         scope: InstrumentationScope,
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             _ = self.provider.getLogger(self.scope) catch return;
         }
     }{
@@ -390,8 +384,7 @@ test "Logger_GetLogger_Same_Scope" {
 
     try bench.addParam("Logger_GetLogger_Same_Scope", &get_logger, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }

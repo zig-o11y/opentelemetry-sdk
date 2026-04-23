@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const zbench = @import("benchmark");
 
 const sdk = @import("opentelemetry-sdk");
@@ -7,20 +8,9 @@ const Tracer = sdk.trace.Tracer;
 
 const TracerAPI = sdk.api.trace.Tracer;
 const IDGenerator = sdk.trace.IDGenerator;
-const RandomIDGenerator = sdk.trace.RandomIDGenerator;
 
 const Attribute = sdk.Attribute;
 const AttributeValue = sdk.AttributeValue;
-
-// Thread-local random number generator
-threadlocal var thread_rng: ?std.Random.DefaultPrng = null;
-
-fn getThreadRng() *std.Random.DefaultPrng {
-    if (thread_rng == null) {
-        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.timestamp())));
-    }
-    return &thread_rng.?;
-}
 
 // Benchmark configuration
 const Config = zbench.Config{
@@ -30,41 +20,9 @@ const Config = zbench.Config{
     .track_allocations = true,
 };
 
-fn setupSDK(allocator: std.mem.Allocator) !*TracerProvider {
-    var prng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.timestamp())));
-    const random = prng.random();
-    const id_gen = IDGenerator{ .Random = RandomIDGenerator.init(random) };
-    const tp = try TracerProvider.init(allocator, id_gen);
-    errdefer tp.deinit();
-    return tp;
-}
-
-// Helper function to create a TracerProvider with ID generator
 fn createTracerProvider(allocator: std.mem.Allocator) !*TracerProvider {
-    var prng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.timestamp())));
-    const random = prng.random();
-    const id_gen = IDGenerator{ .Random = RandomIDGenerator.init(random) };
-    return try TracerProvider.init(allocator, id_gen);
-}
-
-// Generate random attributes similar to metrics benchmarks
-const ATTR_VALUES = [_][]const u8{
-    "value_0", "value_1", "value_2", "value_3", "value_4",
-    "value_5", "value_6", "value_7", "value_8", "value_9",
-};
-
-const ATTR_KEYS = [_][]const u8{
-    "key_0", "key_1", "key_2", "key_3", "key_4",
-    "key_5", "key_6", "key_7", "key_8", "key_9",
-};
-
-fn getRandomAttribute(rng: *std.Random.DefaultPrng) Attribute {
-    const key_idx = rng.random().int(usize) % ATTR_KEYS.len;
-    const val_idx = rng.random().int(usize) % ATTR_VALUES.len;
-    return Attribute{
-        .key = ATTR_KEYS[key_idx],
-        .value = AttributeValue{ .string = ATTR_VALUES[val_idx] },
-    };
+    const id_gen = IDGenerator{ .TimeBased = .{} };
+    return try TracerProvider.init(allocator, runtime.io(), id_gen);
 }
 
 // === BENCHMARK TESTS ===
@@ -80,23 +38,23 @@ test "Span_Create_W/O_Attributes" {
     const without_attributes = struct {
         tracer: *TracerAPI,
 
-        pub fn setup(_: @This(), _: std.mem.Allocator) void {}
-        pub fn run(self: @This(), allocator: std.mem.Allocator) void {
+        pub fn run(self: *@This(), allocator: std.mem.Allocator) void {
             var span = self.tracer.startSpan(allocator, "test_span", .{}) catch return;
+            defer span.deinit();
             span.end(null);
         }
-        pub fn teardown(_: @This(), _: std.mem.Allocator) void {}
-    }{ .tracer = tracer };
+    }{
+        .tracer = tracer,
+    };
 
     var bench = zbench.Benchmark.init(std.testing.allocator, Config);
     defer bench.deinit();
 
     try bench.addParam("Span_Create_Without_Attributes", &without_attributes, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Span_Create_With_Attributes" {
@@ -111,10 +69,11 @@ test "Span_Create_With_Attributes" {
         tracer: *TracerAPI,
         attrs: [5]Attribute,
 
-        pub fn run(self: @This(), allocator: std.mem.Allocator) void {
+        pub fn run(self: *@This(), allocator: std.mem.Allocator) void {
             var span = self.tracer.startSpan(allocator, "test_span", .{
                 .attributes = &self.attrs,
             }) catch return;
+            defer span.deinit();
             span.end(null);
         }
     }{
@@ -133,10 +92,9 @@ test "Span_Create_With_Attributes" {
 
     try bench.addParam("Span_Create_With_Attributes", &with_attributes, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Span_SetAttribute" {
@@ -150,8 +108,9 @@ test "Span_SetAttribute" {
     const set_attribute = struct {
         tracer: *TracerAPI,
 
-        pub fn run(self: @This(), allocator: std.mem.Allocator) void {
+        pub fn run(self: *@This(), allocator: std.mem.Allocator) void {
             var span = self.tracer.startSpan(allocator, "test_span", .{}) catch return;
+            defer span.deinit();
             defer span.end(null);
             span.setAttribute("test_key", AttributeValue{ .string = "test_value" }) catch return;
         }
@@ -164,10 +123,9 @@ test "Span_SetAttribute" {
 
     try bench.addParam("Span_SetAttribute", &set_attribute, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Span_AddEvent" {
@@ -182,8 +140,9 @@ test "Span_AddEvent" {
         tracer: *TracerAPI,
         attrs: [3]Attribute,
 
-        pub fn run(self: @This(), allocator: std.mem.Allocator) void {
+        pub fn run(self: *@This(), allocator: std.mem.Allocator) void {
             var span = self.tracer.startSpan(allocator, "test_span", .{}) catch return;
+            defer span.deinit();
             defer span.end(null);
             span.addEvent("test_event", null, &self.attrs) catch return;
         }
@@ -201,10 +160,9 @@ test "Span_AddEvent" {
 
     try bench.addParam("Span_AddEvent", &add_event, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Span_Nested_Creation" {
@@ -215,30 +173,30 @@ test "Span_Nested_Creation" {
         .name = "benchmark.trace",
     });
 
-    const bench_config = Config;
-
     const nested_spans = struct {
         tracer: *TracerAPI,
 
-        pub fn run(self: @This(), allocator: std.mem.Allocator) void {
+        pub fn run(self: *@This(), allocator: std.mem.Allocator) void {
             var parent_span = self.tracer.startSpan(allocator, "parent_span", .{}) catch return;
+            defer parent_span.deinit();
             defer parent_span.end(null);
 
-            // Note: For now we'll just create two spans since we need to study the parent relationship API
             var child_span = self.tracer.startSpan(allocator, "child_span", .{}) catch return;
+            defer child_span.deinit();
             defer child_span.end(null);
         }
-    }{ .tracer = tracer };
+    }{
+        .tracer = tracer,
+    };
 
-    var bench = zbench.Benchmark.init(std.testing.allocator, bench_config);
+    var bench = zbench.Benchmark.init(std.testing.allocator, Config);
     defer bench.deinit();
 
     try bench.addParam("Span_Nested_Creation", &nested_spans, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Span_Non_Recording" {
@@ -249,33 +207,31 @@ test "Span_Non_Recording" {
         .name = "benchmark.trace",
     });
 
-    const bench_config = Config;
-
     const non_recording = struct {
         tracer: *TracerAPI,
 
-        pub fn run(self: @This(), allocator: std.mem.Allocator) void {
+        pub fn run(self: *@This(), allocator: std.mem.Allocator) void {
             var span = self.tracer.startSpan(allocator, "non_recording_span", .{
                 .kind = .Internal,
             }) catch return;
+            defer span.deinit();
             defer span.end(null);
 
-            // Add some operations that would normally be recorded
             span.setAttribute("key", .{ .string = "value" }) catch return;
             span.addEvent("test_event", null, null) catch return;
-            // span.setStatus(.{ .code = .ok }); // TODO: Check if this method exists
         }
-    }{ .tracer = tracer };
+    }{
+        .tracer = tracer,
+    };
 
-    var bench = zbench.Benchmark.init(std.testing.allocator, bench_config);
+    var bench = zbench.Benchmark.init(std.testing.allocator, Config);
     defer bench.deinit();
 
     try bench.addParam("Span_Non_Recording", &non_recording, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "Span_Concurrent_Creation" {
@@ -293,44 +249,59 @@ test "Span_Concurrent_Creation" {
         .track_allocations = true,
     };
 
+    // One arena per thread to avoid synchronization overhead and keep allocations
+    // outside the std.testing.allocator domain.
+    var arenas = [4]std.heap.ArenaAllocator{
+        std.heap.ArenaAllocator.init(std.heap.page_allocator),
+        std.heap.ArenaAllocator.init(std.heap.page_allocator),
+        std.heap.ArenaAllocator.init(std.heap.page_allocator),
+        std.heap.ArenaAllocator.init(std.heap.page_allocator),
+    };
+    defer for (&arenas) |*arena| arena.deinit();
+
     const concurrent_spans = struct {
         tracer: *TracerAPI,
+        arenas: *[4]std.heap.ArenaAllocator,
 
-        pub fn run(self: @This(), allocator: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const thread_count = 4;
-            const threads = allocator.alloc(std.Thread, thread_count) catch return;
-            defer allocator.free(threads);
+            var threads: [4]std.Thread = undefined;
 
             const worker = struct {
-                fn work(t: *TracerAPI, alloc: std.mem.Allocator, index: usize) void {
+                fn work(t: *TracerAPI, arena: *std.heap.ArenaAllocator, index: usize) void {
+                    _ = arena.reset(.retain_capacity);
                     for (0..10) |_| {
-                        var span = t.startSpan(alloc, "concurrent_span", .{}) catch return;
-                        defer t.endSpan(&span);
+                        var span = t.startSpan(arena.allocator(), "concurrent_span", .{}) catch return;
+                        defer span.deinit();
+                        defer span.end(null);
                         span.setAttribute("thread_id", .{ .int = @intCast(index) }) catch {};
                     }
                 }
             };
 
-            for (threads, 0..) |*thread, i| {
-                thread.* = std.Thread.spawn(.{}, worker.work, .{ self.tracer, allocator, i }) catch {
-                    // If spawn fails, just continue without this thread
+            var spawned: usize = 0;
+            for (0..thread_count) |i| {
+                threads[spawned] = std.Thread.spawn(.{}, worker.work, .{ self.tracer, &self.arenas[i], i }) catch {
                     continue;
                 };
+                spawned += 1;
             }
 
-            for (threads) |thread| {
-                thread.join();
+            for (0..spawned) |i| {
+                threads[i].join();
             }
         }
-    }{ .tracer = tracer };
+    }{
+        .tracer = tracer,
+        .arenas = &arenas,
+    };
 
     var bench = zbench.Benchmark.init(std.testing.allocator, bench_config);
     defer bench.deinit();
 
     try bench.addParam("Span_Concurrent_Creation", &concurrent_spans, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }

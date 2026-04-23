@@ -376,7 +376,7 @@ pub fn simpleLogRecordProcessorCreate(exporter: ?*OtelLogRecordExporter) callcon
     const exp: *LogRecordExporter = @ptrCast(@alignCast(e));
 
     const storage = allocator.create(SimpleLogRecordProcessor) catch return null;
-    storage.* = SimpleLogRecordProcessor.init(allocator, exp.*);
+    storage.* = SimpleLogRecordProcessor.init(allocator, runtime.io(), exp.*);
 
     const processor_ptr = allocator.create(LogRecordProcessor) catch {
         allocator.destroy(storage);

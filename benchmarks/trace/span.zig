@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const benchmark = @import("benchmark");
 
 const sdk = @import("opentelemetry-sdk");
@@ -18,7 +19,7 @@ threadlocal var thread_rng: ?std.Random.DefaultPrng = null;
 
 fn getThreadRng() *std.Random.DefaultPrng {
     if (thread_rng == null) {
-        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.timestamp())));
+        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(runtime.timestamp())));
     }
     return &thread_rng.?;
 }
@@ -89,7 +90,7 @@ test "SimpleProcessor_OnEnd_Single" {
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var processor = SimpleProcessor.init(std.testing.allocator, exporter);
+    var processor = SimpleProcessor.init(std.testing.allocator, runtime.io(), exporter);
     const span_processor = processor.asSpanProcessor();
 
     var bench = benchmark.Benchmark.init(std.testing.allocator, bench_config);
@@ -103,7 +104,7 @@ test "SimpleProcessor_OnEnd_Single" {
         allocator: std.mem.Allocator,
         span_counter: *std.atomic.Value(u32),
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const counter = self.span_counter.fetchAdd(1, .monotonic);
             var test_span = createTestSpan(self.allocator, "benchmark-span", @intCast(counter % 256));
             defer test_span.deinit();
@@ -118,17 +119,16 @@ test "SimpleProcessor_OnEnd_Single" {
 
     try bench.addParam("SimpleProcessor_OnEnd_Single", &simple_single, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "SimpleProcessor_OnEnd_With_Attributes" {
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var processor = SimpleProcessor.init(std.testing.allocator, exporter);
+    var processor = SimpleProcessor.init(std.testing.allocator, runtime.io(), exporter);
     const span_processor = processor.asSpanProcessor();
 
     var bench = benchmark.Benchmark.init(std.testing.allocator, bench_config);
@@ -142,7 +142,7 @@ test "SimpleProcessor_OnEnd_With_Attributes" {
         allocator: std.mem.Allocator,
         span_counter: *std.atomic.Value(u32),
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const counter = self.span_counter.fetchAdd(1, .monotonic);
             var test_span = createTestSpan(self.allocator, "benchmark-span-attrs", @intCast(counter % 256));
             defer test_span.deinit();
@@ -165,17 +165,16 @@ test "SimpleProcessor_OnEnd_With_Attributes" {
 
     try bench.addParam("SimpleProcessor_OnEnd_With_Attributes", &simple_with_attrs, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "BatchingProcessor_OnEnd_Single" {
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var processor = try BatchingProcessor.init(std.testing.allocator, exporter, .{
+    var processor = try BatchingProcessor.init(std.testing.allocator, runtime.io(), exporter, .{
         .max_export_batch_size = 512,
         .scheduled_delay_millis = 1000, // Long delay to avoid timing effects
         .max_queue_size = 4096,
@@ -199,7 +198,7 @@ test "BatchingProcessor_OnEnd_Single" {
         allocator: std.mem.Allocator,
         span_counter: *std.atomic.Value(u32),
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const counter = self.span_counter.fetchAdd(1, .monotonic);
             var test_span = createTestSpan(self.allocator, "batch-span", @intCast(counter % 256));
             defer test_span.deinit();
@@ -214,17 +213,16 @@ test "BatchingProcessor_OnEnd_Single" {
 
     try bench.addParam("BatchingProcessor_OnEnd_Single", &batch_single, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "BatchingProcessor_OnEnd_With_Attributes" {
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var processor = try BatchingProcessor.init(std.testing.allocator, exporter, .{
+    var processor = try BatchingProcessor.init(std.testing.allocator, runtime.io(), exporter, .{
         .max_export_batch_size = 512,
         .scheduled_delay_millis = 1000, // Long delay to avoid timing effects
         .max_queue_size = 2048,
@@ -248,7 +246,7 @@ test "BatchingProcessor_OnEnd_With_Attributes" {
         allocator: std.mem.Allocator,
         span_counter: *std.atomic.Value(u32),
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             const counter = self.span_counter.fetchAdd(1, .monotonic);
             var test_span = createTestSpan(self.allocator, "batch-span-attrs", @intCast(counter % 256));
             defer test_span.deinit();
@@ -269,17 +267,16 @@ test "BatchingProcessor_OnEnd_With_Attributes" {
 
     try bench.addParam("BatchingProcessor_OnEnd_With_Attributes", &batch_with_attrs, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "BatchingProcessor_Batch_Full" {
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var processor = try BatchingProcessor.init(std.testing.allocator, exporter, .{
+    var processor = try BatchingProcessor.init(std.testing.allocator, runtime.io(), exporter, .{
         .max_export_batch_size = 10, // Small batch size to trigger frequent exports
         .scheduled_delay_millis = 100,
         .max_queue_size = 1000,
@@ -307,7 +304,7 @@ test "BatchingProcessor_Batch_Full" {
         allocator: std.mem.Allocator,
         span_counter: *std.atomic.Value(u32),
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             // Create multiple spans to trigger batch export
             var spans: [12]trace_api.Span = undefined;
             defer {
@@ -331,17 +328,16 @@ test "BatchingProcessor_Batch_Full" {
 
     try bench.addParam("BatchingProcessor_Batch_Full", &batch_full, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "BatchingProcessor_ForceFlush" {
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var processor = try BatchingProcessor.init(std.testing.allocator, exporter, .{
+    var processor = try BatchingProcessor.init(std.testing.allocator, runtime.io(), exporter, .{
         .max_export_batch_size = 512,
         .scheduled_delay_millis = 10000, // Very long delay to rely on force flush
         .max_queue_size = 2048,
@@ -369,7 +365,7 @@ test "BatchingProcessor_ForceFlush" {
         allocator: std.mem.Allocator,
         span_counter: *std.atomic.Value(u32),
 
-        pub fn run(self: @This(), _: std.mem.Allocator) void {
+        pub fn run(self: *@This(), _: std.mem.Allocator) void {
             // Add several spans
             var spans: [5]trace_api.Span = undefined;
             defer {
@@ -395,20 +391,19 @@ test "BatchingProcessor_ForceFlush" {
 
     try bench.addParam("BatchingProcessor_ForceFlush", &force_flush, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 test "SpanProcessor_Concurrent" {
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var simple_processor = SimpleProcessor.init(std.testing.allocator, exporter);
+    var simple_processor = SimpleProcessor.init(std.testing.allocator, runtime.io(), exporter);
     const simple_span_processor = simple_processor.asSpanProcessor();
 
-    var batch_processor = try BatchingProcessor.init(std.testing.allocator, exporter, .{
+    var batch_processor = try BatchingProcessor.init(std.testing.allocator, runtime.io(), exporter, .{
         .max_export_batch_size = 100,
         .scheduled_delay_millis = 500,
         .max_queue_size = 1000,
@@ -439,17 +434,16 @@ test "SpanProcessor_Concurrent" {
     };
     try bench.addParam("SpanProcessor_Concurrent_Batch", &concurrent_batch, .{});
 
-    var buffer: [4096]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    try bench.run(&writer.interface);
-    try writer.interface.flush();
+    const io = runtime.io();
+    const stderr: std.Io.File = .stderr();
+    try bench.run(io, stderr);
 }
 
 const ConcurrentProcessorBench = struct {
     processor: SpanProcessor,
     name: []const u8,
 
-    pub fn run(self: @This(), _: std.mem.Allocator) void {
+    pub fn run(self: *@This(), _: std.mem.Allocator) void {
         const t1 = std.Thread.spawn(.{}, processSpans, .{ self.processor, "thread1", 0 }) catch @panic("spawn failed");
         const t2 = std.Thread.spawn(.{}, processSpans, .{ self.processor, "thread2", 100 }) catch @panic("spawn failed");
         const t3 = std.Thread.spawn(.{}, processSpans, .{ self.processor, "thread3", 200 }) catch @panic("spawn failed");
