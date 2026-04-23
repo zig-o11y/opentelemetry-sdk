@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 const trace_sdk = sdk.trace;
 const trace_api = sdk.api.trace;
@@ -21,7 +22,7 @@ pub fn main() !void {
     std.debug.print("✓ Traces compression test passed\n\n", .{});
 }
 
-fn testTraces(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
+fn testTraces(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) !void {
     // Configure the OTLP exporter to use the collector
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
@@ -30,7 +31,7 @@ fn testTraces(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
     config.endpoint = "localhost:" ++ common.COLLECTOR_HTTP_PORT;
 
     // Create ID generator for traces
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(runtime.milliTimestamp()));
     const id_generator = trace_sdk.IDGenerator{
         .Random = trace_sdk.RandomIDGenerator.init(prng.random()),
     };
@@ -76,7 +77,7 @@ fn testTraces(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
         defer span.deinit();
 
         // Simulate some work
-        std.Thread.sleep(10 * std.time.ns_per_ms);
+        runtime.sleep(10 * std.time.ns_per_ms);
 
         span.setStatus(trace_api.Status.ok());
         tracer.endSpan(&span);
@@ -84,7 +85,7 @@ fn testTraces(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
 
     // Give the collector time to process and write the traces
     std.debug.print("  Waiting for collector to process and write traces...\n", .{});
-    std.Thread.sleep(2 * std.time.ns_per_s);
+    runtime.sleep(2 * std.time.ns_per_s);
 
     // Validate that the collector received the traces by reading the JSON file
     std.debug.print("  Successfully sent {d} trace spans\n", .{num_spans});
@@ -116,7 +117,7 @@ fn testTraces(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
     otlp_exporter.deinit();
 }
 
-fn testTracesWithCompression(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
+fn testTracesWithCompression(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) !void {
     // Configure the OTLP exporter with gzip compression
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
@@ -126,7 +127,7 @@ fn testTracesWithCompression(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) 
     config.compression = .gzip;
 
     // Create ID generator for traces
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(runtime.milliTimestamp()));
     const id_generator = trace_sdk.IDGenerator{
         .Random = trace_sdk.RandomIDGenerator.init(prng.random()),
     };
@@ -173,7 +174,7 @@ fn testTracesWithCompression(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) 
         defer span.deinit();
 
         // Simulate some work
-        std.Thread.sleep(10 * std.time.ns_per_ms);
+        runtime.sleep(10 * std.time.ns_per_ms);
 
         span.setStatus(trace_api.Status.ok());
         tracer.endSpan(&span);
@@ -181,7 +182,7 @@ fn testTracesWithCompression(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) 
 
     // Give the collector time to process
     std.debug.print("  Waiting for collector to process compressed traces...\n", .{});
-    std.Thread.sleep(2 * std.time.ns_per_s);
+    runtime.sleep(2 * std.time.ns_per_s);
 
     // Validate that the collector received the compressed traces
     std.debug.print("  Successfully sent {d} compressed trace spans\n", .{num_spans});

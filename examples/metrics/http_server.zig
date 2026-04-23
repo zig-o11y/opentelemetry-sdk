@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const http = std.http;
 const sdk = @import("opentelemetry-sdk");
 const metrics_sdk = sdk.metrics;
@@ -6,7 +7,7 @@ const view = metrics_sdk.View;
 const Kind = metrics_sdk.Kind;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
 
     const otel = try setupTelemetry(allocator);
@@ -25,7 +26,7 @@ pub fn main() !void {
     const worker = try std.Thread.spawn(.{}, MonitoredHTTPServer.serveRequest, .{&prod_server});
 
     // Send an HTTP request to the server
-    var client = http.Client{ .allocator = allocator };
+    var client = http.Client{ .allocator = allocator, .io = runtime.io() };
     const uri = try std.Uri.parse("http://127.0.0.1:4488");
     var req = try client.request(.GET, uri, .{});
     defer req.deinit();
@@ -50,16 +51,16 @@ pub fn main() !void {
 const MonitoredHTTPServer = struct {
     const Self = @This();
 
-    net_server: std.net.Server,
+    net_server: std.Io.net.Server,
 
     request_counter: *metrics_sdk.Counter(u64),
     response_latency: *metrics_sdk.Histogram(f64),
 
     pub fn init(mp: *metrics_sdk.MeterProvider, ip: []const u8, port: u16) !Self {
-        const addr = try std.net.Address.parseIp(ip, port);
+        const address = try std.Io.net.IpAddress.parse(ip, port);
         const meter = try mp.getMeter(.{ .name = "standard/http.server" });
         return Self{
-            .net_server = try addr.listen(.{ .reuse_address = true }),
+            .net_server = try address.listen(runtime.io(), .{ .reuse_address = true }),
             .request_counter = try meter.createCounter(u64, .{
                 .name = "http.server.requests",
                 .description = "Total number of HTTP requests received",
@@ -73,17 +74,17 @@ const MonitoredHTTPServer = struct {
     }
 
     pub fn serveRequest(self: *Self) !void {
-        const connection = try self.net_server.accept();
-        defer connection.stream.close();
+        var stream = try self.net_server.accept(runtime.io());
+        defer stream.close(runtime.io());
 
         var read_buffer: [8192]u8 = undefined;
         var write_buffer: [8192]u8 = undefined;
-        var conn_reader = connection.stream.reader(&read_buffer);
-        var conn_writer = connection.stream.writer(&write_buffer);
-        var server = http.Server.init(conn_reader.interface(), &conn_writer.interface);
+        var conn_reader = stream.reader(runtime.io(), &read_buffer);
+        var conn_writer = stream.writer(runtime.io(), &write_buffer);
+        var server = http.Server.init(&conn_reader.interface, &conn_writer.interface);
 
-        const start = std.time.milliTimestamp();
-        defer self.response_latency.record(@floatFromInt(std.time.milliTimestamp() - start), .{}) catch unreachable;
+        const start = runtime.milliTimestamp();
+        defer self.response_latency.record(@floatFromInt(runtime.milliTimestamp() - start), .{}) catch unreachable;
 
         var request = server.receiveHead() catch |err| {
             try self.request_counter.add(1, .{ "error", true, "reason", @errorName(err) });

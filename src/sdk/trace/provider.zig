@@ -1,6 +1,12 @@
 const std = @import("std");
 const runtime = @import("runtime");
 const context = @import("../../api/context.zig");
+
+// NOTE: API-surface mutex operations use lockUncancelable so that user-facing
+// methods do not introduce cancellation points. This is safe with Io.Threaded
+// (the default) but means user cancellations will be ignored if the SDK is
+// used with Io.Evented. Switching to lock() would require propagating
+// error{Canceled} through all public APIs.
 const SpanProcessor = @import("span_processor.zig").SpanProcessor;
 const BatchingProcessor = @import("span_processor.zig").BatchingProcessor;
 const SimpleProcessor = @import("span_processor.zig").SimpleProcessor;

@@ -53,8 +53,7 @@ const AttributeValue = @import("../attributes.zig").AttributeValue;
 const SpanProcessor = @import("../sdk/trace/span_processor.zig").SpanProcessor;
 const SimpleProcessor = @import("../sdk/trace/span_processor.zig").SimpleProcessor;
 const SpanExporter = @import("../sdk/trace/span_exporter.zig").SpanExporter;
-const StdOutExporter = @import("../sdk/trace/exporters/generic.zig").StdoutExporter;
-const DeprecatedStdoutExporter = @import("../sdk/trace/exporters/generic.zig").DeprecatedStdoutExporter;
+const StdoutExporter = @import("../sdk/trace/exporters/generic.zig").StdoutExporter;
 const IDGenerator = @import("../sdk/trace/id_generator.zig").IDGenerator;
 const RandomIDGenerator = @import("../sdk/trace/id_generator.zig").RandomIDGenerator;
 const InstrumentationScope = @import("../scope.zig").InstrumentationScope;
@@ -633,19 +632,26 @@ pub fn spanGetSpanIdHex(
 /// Create a stdout SpanExporter for debugging.
 ///
 /// Returns: Pointer to the SpanExporter, or null on error.
+const StdoutExporterWrapper = struct {
+    exporter: StdoutExporter,
+    buffer: [4096]u8,
+};
+
 pub fn spanExporterStdoutCreate() callconv(.c) ?*OtelSpanExporter {
     const allocator = getCAllocator();
 
-    // Allocate the exporter on the heap
-    const exporter_ptr = allocator.create(DeprecatedStdoutExporter) catch return null;
-    exporter_ptr.* = DeprecatedStdoutExporter.init(std.Io.File.stdout().deprecatedWriter());
+    const wrapper = allocator.create(StdoutExporterWrapper) catch return null;
+    wrapper.* = .{
+        .buffer = undefined,
+        .exporter = StdoutExporter.init(std.Io.File.stdout().writer(runtime.io(), &wrapper.buffer)),
+    };
 
     // Allocate the SpanExporter interface on the heap
     const span_exporter_ptr = allocator.create(SpanExporter) catch {
-        allocator.destroy(exporter_ptr);
+        allocator.destroy(wrapper);
         return null;
     };
-    span_exporter_ptr.* = exporter_ptr.asSpanExporter();
+    span_exporter_ptr.* = wrapper.exporter.asSpanExporter();
 
     return @ptrCast(span_exporter_ptr);
 }

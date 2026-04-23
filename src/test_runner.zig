@@ -317,7 +317,7 @@ const SlowTracker = struct {
     allocator: Allocator,
     max: usize,
     slowest: SlowestQueue,
-    started_ns: i128,
+    started_ns: u64,
 
     fn init(allocator: Allocator, count: u32) SlowTracker {
         var slowest = SlowestQueue.initContext({});
@@ -325,7 +325,7 @@ const SlowTracker = struct {
         return .{
             .allocator = allocator,
             .max = count,
-            .started_ns = runtime.nanoTimestamp(),
+            .started_ns = runtime.monotonicNs(),
             .slowest = slowest,
         };
     }
@@ -340,11 +340,11 @@ const SlowTracker = struct {
     }
 
     fn startTiming(self: *SlowTracker) void {
-        self.started_ns = runtime.nanoTimestamp();
+        self.started_ns = runtime.monotonicNs();
     }
 
     fn endTiming(self: *SlowTracker, test_name: []const u8) u64 {
-        const ns: u64 = @intCast(runtime.nanoTimestamp() - self.started_ns);
+        const ns: u64 = runtime.monotonicNs() - self.started_ns;
 
         var slowest = &self.slowest;
 

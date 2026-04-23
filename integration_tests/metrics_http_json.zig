@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 const metrics_sdk = sdk.metrics;
 const common = @import("common.zig");
@@ -16,7 +17,7 @@ pub fn main() !void {
 
 // Sends metrics with string attributes via http/json to a real OTel collector.
 // This validates that the AnyValue oneof field is correctly serialized and the JSON is conformant.
-fn testMetricsHttpJson(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
+fn testMetricsHttpJson(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) !void {
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
@@ -48,7 +49,7 @@ fn testMetricsHttpJson(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void 
     try mr.collect();
 
     // Give the collector time to batch and flush to disk.
-    std.Thread.sleep(1 * std.time.ns_per_s);
+    runtime.sleep(1 * std.time.ns_per_s);
 
     std.debug.print("  Sent {d} data points via http/json\n", .{num_data_points});
     std.debug.print("  Waiting for collector to write metrics.json...\n", .{});

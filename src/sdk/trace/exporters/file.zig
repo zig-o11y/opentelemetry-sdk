@@ -41,7 +41,7 @@ pub const FileExporter = struct {
     pub fn init(allocator: std.mem.Allocator, resource: Resource, options: Options) !Self {
         const file = if (options.file_path) |path| blk: {
             const flags: std.Io.Dir.CreateFileOptions = if (options.append)
-                .{ .read = true, .truncate = false }
+                .{ .read = true, .truncate = false, .lock = .exclusive }
             else
                 .{ .read = true, .truncate = true };
             break :blk try runtime.fs.cwdCreateFile(path, flags);

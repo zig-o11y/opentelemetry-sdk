@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 const metrics_sdk = sdk.metrics;
 const MeterProvider = metrics_sdk.MeterProvider;
@@ -8,9 +9,9 @@ const otlp_stub = @import("otlp-stub");
 const pbmetrics = @import("opentelemetry-proto").collector_metrics_v1;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
-    defer if (gpa.detectLeaks()) @panic("leaks detected");
+    defer if (gpa.deinit() == .leak) @panic("leaks detected");
 
     // number of data points we expect to send
     const how_many = 10;

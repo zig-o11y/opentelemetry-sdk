@@ -921,110 +921,18 @@ pub fn ExportFile(
     };
     defer allocator.free(payload);
 
+    // Lock the file to prevent TOCTOU between stat and write.
+    // This serializes both intra-process threads and inter-process writers
+    // that respect advisory locks.
+    try file.lock(runtime.io(), .exclusive);
+    defer file.unlock(runtime.io());
+
     const stat = try file.stat(runtime.io());
     const offset = stat.size;
 
     try file.writePositionalAll(runtime.io(), payload, offset);
     try file.writePositionalAll(runtime.io(), "\n", offset + payload.len);
     try file.sync(runtime.io());
-}
-
-// NOTE: The following code **not used** in the current implementation, but it is here to show how it could be done.
-
-// This is an attempt to implement a priority queue for the retryable requests.
-// The retryable requests are stored in a priority queue, sorted by the next attempt time.
-// A single thread, or a thread pool, can be used to process the requests.
-fn ExpBackoffQueue(comptime Retry: type) type {
-    return struct {
-        const Self = @This();
-
-        const DelayedRetry = struct {
-            value: Retry,
-            next_attempt_time_ms: u64,
-            attempts_counter: u32,
-        };
-
-        allocator: std.mem.Allocator,
-        queue: std.PriorityQueue(DelayedRetry, void, compareRetriable),
-        mutex: std.Io.Mutex,
-        signal: *std.Io.Event,
-        config: ExpBackoffconfig,
-
-        fn init(allocator: std.mem.Allocator, config: ExpBackoffconfig, signal: *std.Io.Event) !*Self {
-            const s = try allocator.create(Self);
-            s.* = Self{
-                .allocator = allocator,
-                .queue = std.PriorityQueue(DelayedRetry, void, compareRetriable).initContext({}),
-                .mutex = std.Io.Mutex.init,
-                .signal = signal,
-                .config = config,
-            };
-            return s;
-        }
-
-        pub fn deinit(self: *Self) void {
-            self.mutex.lockUncancelable(runtime.io());
-            while (self.queue.pop()) |_| {}
-            self.queue.deinit(self.allocator);
-            self.mutex.unlock(runtime.io());
-
-            self.allocator.destroy(self);
-        }
-
-        fn compareRetriable(_: void, a: DelayedRetry, b: DelayedRetry) std.math.Order {
-            return std.math.order(a.next_attempt_time_ms, b.next_attempt_time_ms);
-        }
-
-        fn enqueue(self: *Self, value: Retry, attempt: u32) !void {
-            const next_attempt_ms = @as(u64, @intCast(runtime.milliTimestamp())) +
-                calculateDelayMillisec(self.config.base_delay_ms, self.config.max_delay_ms, attempt);
-
-            const req = DelayedRetry{
-                .value = value,
-                .attempts_counter = attempt,
-                .next_attempt_time_ms = next_attempt_ms,
-            };
-
-            self.mutex.lockUncancelable(runtime.io());
-            try self.queue.push(self.allocator, req);
-            self.mutex.unlock(runtime.io());
-
-            self.signal.set(runtime.io());
-        }
-
-        fn poll(self: *Self) ?Retry {
-            self.mutex.lockUncancelable(runtime.io());
-            defer self.mutex.unlock(runtime.io());
-
-            if (self.queue.pop()) |item| {
-                return item.value;
-            }
-            return null;
-        }
-    };
-}
-
-test "otlp ExpBackOffqueue for request FetchOptions" {
-    var signal: std.Io.Event = .unset;
-
-    const cfg = ExpBackoffconfig{
-        .max_retries = 10,
-        .base_delay_ms = 1,
-        .max_delay_ms = 1,
-    };
-    const queue = ExpBackoffQueue(*http.Client.FetchOptions);
-
-    const q = try queue.init(std.testing.allocator, cfg, &signal);
-    defer q.deinit();
-
-    var req = http.Client.FetchOptions{
-        .location = .{ .url = "http://localhost:4317/v1/metrics" },
-        .method = .POST,
-    };
-    try std.testing.expect(q.poll() == null);
-
-    try q.enqueue(&req, 0);
-    try std.testing.expectEqual(req, q.poll().?.*);
 }
 
 // Integration tests

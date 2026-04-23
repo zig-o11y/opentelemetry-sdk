@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 const metrics_sdk = sdk.metrics;
 const MeterProvider = metrics_sdk.MeterProvider;
@@ -8,7 +9,7 @@ const MetricReader = metrics_sdk.MetricReader;
 /// Integration test for the Prometheus exporter.
 /// Tests the HTTP server and Prometheus text format output.
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const leaked = gpa.deinit();
         if (leaked == .leak) {
@@ -57,7 +58,7 @@ fn testPrometheusExporter(allocator: std.mem.Allocator, port: u16) !void {
     std.log.info("✓ Prometheus exporter started on port {d}", .{port});
 
     // Wait for server to be ready
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    runtime.sleep(500 * std.time.ns_per_ms);
 
     // Step 5: Create a meter and instruments
     const meter = try mp.getMeter(.{
@@ -103,21 +104,26 @@ fn testPrometheusExporter(allocator: std.mem.Allocator, port: u16) !void {
     var response_body = std.array_list.Managed(u8).init(allocator);
     defer response_body.deinit();
 
-    const address = try std.net.Address.parseIp("127.0.0.1", port);
-    const stream = try std.net.tcpConnectToAddress(address);
-    defer stream.close();
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", port);
+    const stream = try address.connect(runtime.io(), .{ .mode = .stream });
+    defer stream.close(runtime.io());
 
     // Send HTTP GET request
     const request = "GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
-    try stream.writeAll(request);
+    var write_buffer: [4096]u8 = undefined;
+    var writer = stream.writer(runtime.io(), &write_buffer);
+    try writer.interface.writeAll(request);
+    try writer.interface.flush();
 
     // Read response
+    var read_buffer: [4096]u8 = undefined;
+    var reader_stream = stream.reader(runtime.io(), &read_buffer);
     var buf: [4096]u8 = undefined;
     var total_read: usize = 0;
     while (true) {
-        const n = stream.read(&buf) catch |err| {
+        const n = reader_stream.interface.readSliceShort(&buf) catch |err| {
             if (err == error.WouldBlock) {
-                std.Thread.sleep(10 * std.time.ns_per_ms);
+                runtime.sleep(10 * std.time.ns_per_ms);
                 continue;
             }
             return err;
@@ -264,17 +270,22 @@ fn validateMetricContent(body: []const u8) !void {
 fn test404Response(allocator: std.mem.Allocator, port: u16) !void {
     _ = allocator;
 
-    const address = try std.net.Address.parseIp("127.0.0.1", port);
-    const stream = try std.net.tcpConnectToAddress(address);
-    defer stream.close();
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", port);
+    const stream = try address.connect(runtime.io(), .{ .mode = .stream });
+    defer stream.close(runtime.io());
 
     // Request invalid path
     const request = "GET /invalid HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
-    try stream.writeAll(request);
+    var write_buffer: [1024]u8 = undefined;
+    var writer = stream.writer(runtime.io(), &write_buffer);
+    try writer.interface.writeAll(request);
+    try writer.interface.flush();
 
     // Read response
+    var read_buffer: [1024]u8 = undefined;
+    var reader_stream = stream.reader(runtime.io(), &read_buffer);
     var buf: [1024]u8 = undefined;
-    const n = try stream.read(&buf);
+    const n = try reader_stream.interface.readSliceShort(&buf);
     const response = buf[0..n];
 
     // Validate 404 response

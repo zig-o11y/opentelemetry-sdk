@@ -1,8 +1,9 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -10,8 +11,8 @@ pub fn main() !void {
     std.debug.print("==========================================\n\n", .{});
 
     // Create a stdout exporter
-    const stdout_file = std.fs.File.stdout();
-    var stdout_exporter = sdk.logs.StdoutExporter.init(stdout_file.deprecatedWriter());
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_exporter = sdk.logs.StdoutExporter.init(std.Io.File.stdout().writer(runtime.io(), &stdout_buffer));
     const exporter = stdout_exporter.asLogRecordExporter();
 
     // Create a batching processor with custom config
@@ -48,11 +49,11 @@ pub fn main() !void {
     var i: usize = 0;
     while (i < 10) : (i += 1) {
         logger.emit(9, "INFO", "Batched log message", null);
-        std.Thread.sleep(50 * std.time.ns_per_ms); // Small delay
+        runtime.sleep(50 * std.time.ns_per_ms); // Small delay
     }
 
     std.debug.print("\n\nWaiting for background export...\n", .{});
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    runtime.sleep(500 * std.time.ns_per_ms);
 
     std.debug.print("Force flushing remaining logs...\n", .{});
     try provider.forceFlush();

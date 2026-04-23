@@ -884,6 +884,8 @@ test "PrometheusFormatter: histogram formatting" {
 // HTTP Server Lifecycle Tests
 
 test "PrometheusExporter: server start and stop" {
+    // TODO: Switch to port 0 + discovery to eliminate flakes under parallel tests.
+    // This requires exposing the bound port from the Server socket.
     const allocator = std.testing.allocator;
 
     const exporter = try PrometheusExporter.init(allocator, .{

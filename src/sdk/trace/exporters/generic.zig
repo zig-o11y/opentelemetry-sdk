@@ -94,10 +94,6 @@ fn GenericWriterExporter(
 /// ref: https://opentelemetry.io/docs/specs/otel/trace/sdk_exporters/stdout/
 pub const StdoutExporter = GenericWriterExporter(std.Io.File.Writer);
 
-/// DeprecatedStdoutExporter uses the simpler GenericWriter that doesn't require a buffer.
-/// This is useful for C bindings where buffer management is more complex.
-pub const DeprecatedStdoutExporter = StdoutExporter;
-
 /// InmemoryExporter exports spans to in-memory buffer.
 /// it is designed for testing GenericWriterExporter.
 pub const InMemoryExporter = GenericWriterExporter(std.Io.Writer.Allocating);

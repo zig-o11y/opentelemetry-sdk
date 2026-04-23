@@ -27,6 +27,7 @@
 //! ```
 
 const std = @import("std");
+const runtime = @import("runtime");
 const LoggerProvider = @import("../api/logs/logger_provider.zig").LoggerProvider;
 const Logger = @import("../api/logs/logger_provider.zig").Logger;
 const ReadWriteLogRecord = @import("../api/logs/logger_provider.zig").ReadWriteLogRecord;
@@ -325,14 +326,15 @@ pub fn loggerIsEnabled(
 
 /// Internal wrapper for stdout exporter that holds the exporter together.
 const StdoutLogExporterWrapper = struct {
-    exporter: ?StdoutExporter = null,
+    exporter: StdoutExporter,
+    buffer: [4096]u8,
     log_record_exporter: ?LogRecordExporter = null,
 
     fn init(self: *StdoutLogExporterWrapper) void {
         // Initialize the exporter with stdout
-        self.exporter = StdoutExporter.init(std.Io.File.stdout().deprecatedWriter());
+        self.exporter = StdoutExporter.init(std.Io.File.stdout().writer(runtime.io(), &self.buffer));
         // Now create the log record exporter interface
-        self.log_record_exporter = self.exporter.?.asLogRecordExporter();
+        self.log_record_exporter = self.exporter.asLogRecordExporter();
     }
 };
 
@@ -344,7 +346,11 @@ pub fn logRecordExporterStdoutCreate() callconv(.c) ?*OtelLogRecordExporter {
 
     // Allocate the wrapper on the heap so everything persists
     const wrapper = allocator.create(StdoutLogExporterWrapper) catch return null;
-    wrapper.* = .{}; // Initialize with defaults
+    wrapper.* = .{
+        .buffer = undefined,
+        .exporter = undefined,
+        .log_record_exporter = null,
+    };
     wrapper.init(); // Then initialize the exporter
 
     if (wrapper.log_record_exporter) |*lre| {

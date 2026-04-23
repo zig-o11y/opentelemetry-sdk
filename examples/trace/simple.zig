@@ -1,17 +1,18 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 const trace = sdk.trace;
 const trace_api = sdk.api.trace;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer if (gpa.deinit() == .leak) @panic("leaks detected");
     const allocator = gpa.allocator();
 
     // Create SDK components for a realistic trace setup
 
     // 1. Create an ID generator for trace and span IDs
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(runtime.milliTimestamp()));
     const id_generator = trace.IDGenerator{
         .Random = trace.RandomIDGenerator.init(prng.random()),
     };
@@ -22,7 +23,7 @@ pub fn main() !void {
 
     // 3. Create a stdout exporter and simple processor
     var stdout_buffer: [4096]u8 = undefined;
-    var stdout_exporter = trace.StdOutExporter.init(std.fs.File.stdout().writer(&stdout_buffer));
+    var stdout_exporter = trace.StdOutExporter.init(std.Io.File.stdout().writer(runtime.io(), &stdout_buffer));
     var simple_processor = trace.SimpleProcessor.init(allocator, stdout_exporter.asSpanExporter());
 
     // 4. Add the processor to the provider
@@ -90,12 +91,12 @@ pub fn main() !void {
     try db_span.setAttribute("db.rows_affected", .{ .int = 1 });
 
     // Simulate some work
-    std.Thread.sleep(50 * std.time.ns_per_ms); // DB query time
+    runtime.sleep(50 * std.time.ns_per_ms); // DB query time
 
     // End the DB span first (child spans should end before parent)
     db_span.end(null);
 
-    std.Thread.sleep(50 * std.time.ns_per_ms); // HTTP processing time
+    runtime.sleep(50 * std.time.ns_per_ms); // HTTP processing time
 
     // End the HTTP span
     http_span.end(null);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 
 // Override std.log to use OpenTelemetry bridge
@@ -7,7 +8,7 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -18,8 +19,8 @@ pub fn main() !void {
     std.debug.print("- Logs ALSO appear on stderr (for compatibility)\n\n", .{});
 
     // Create a stdout exporter
-    const stdout_file = std.fs.File.stdout();
-    var stdout_exporter = sdk.logs.StdoutExporter.init(stdout_file.deprecatedWriter());
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_exporter = sdk.logs.StdoutExporter.init(std.Io.File.stdout().writer(runtime.io(), &stdout_buffer));
     const exporter = stdout_exporter.asLogRecordExporter();
 
     // Create a batching processor (more realistic for production)

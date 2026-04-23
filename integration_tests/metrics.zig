@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 const metrics_sdk = sdk.metrics;
 const common = @import("common.zig");
@@ -20,7 +21,7 @@ pub fn main() !void {
     std.debug.print("✓ Metrics compression test passed\n\n", .{});
 }
 
-fn testMetrics(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
+fn testMetrics(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) !void {
     // Configure the OTLP exporter to use the collector
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
@@ -52,7 +53,7 @@ fn testMetrics(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
     try mr.collect();
 
     // Give the collector some time to process and write the file
-    std.Thread.sleep(1 * std.time.ns_per_s);
+    runtime.sleep(1 * std.time.ns_per_s);
 
     // Validate that the collector received the metrics by reading the JSON file
     std.debug.print("  Successfully sent {d} metric data points\n", .{num_data_points});
@@ -77,7 +78,7 @@ fn testMetrics(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
     std.debug.print("  ✓ Metrics JSON validated - found 'test_counter' metric\n", .{});
 }
 
-fn testMetricsWithCompression(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
+fn testMetricsWithCompression(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) !void {
     // Configure the OTLP exporter with gzip compression
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
@@ -110,7 +111,7 @@ fn testMetricsWithCompression(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir)
     try mr.collect();
 
     // Give the collector time to process
-    std.Thread.sleep(1 * std.time.ns_per_s);
+    runtime.sleep(1 * std.time.ns_per_s);
 
     // Wait for the file with expected content
     std.debug.print("  Successfully sent {d} compressed metric data points\n", .{num_data_points});

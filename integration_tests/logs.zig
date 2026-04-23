@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 const logs_sdk = sdk.logs;
 const common = @import("common.zig");
@@ -20,7 +21,7 @@ pub fn main() !void {
     std.debug.print("✓ Logs compression test passed\n\n", .{});
 }
 
-fn testLogs(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
+fn testLogs(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) !void {
     // Configure the OTLP exporter to use the collector
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
@@ -77,7 +78,7 @@ fn testLogs(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
     try provider.shutdown();
 
     // Give the collector some time to process and write the file
-    std.Thread.sleep(1 * std.time.ns_per_s);
+    runtime.sleep(1 * std.time.ns_per_s);
 
     // Validate that the collector received the logs by reading the JSON file
     std.debug.print("  Successfully sent {d} log records\n", .{num_logs + 1});
@@ -103,7 +104,7 @@ fn testLogs(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
     std.debug.print("  ✓ Logs JSON validated - found test log records\n", .{});
 }
 
-fn testLogsWithCompression(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !void {
+fn testLogsWithCompression(allocator: std.mem.Allocator, tmp_dir: std.Io.Dir) !void {
     // Configure the OTLP exporter with gzip compression
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
@@ -157,7 +158,7 @@ fn testLogsWithCompression(allocator: std.mem.Allocator, tmp_dir: std.fs.Dir) !v
     try provider.shutdown();
 
     // Give the collector time to process
-    std.Thread.sleep(1 * std.time.ns_per_s);
+    runtime.sleep(1 * std.time.ns_per_s);
 
     // Validate that the collector received the compressed logs
     std.debug.print("  Successfully sent {d} compressed log records\n", .{num_logs});
