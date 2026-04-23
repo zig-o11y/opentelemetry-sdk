@@ -28,13 +28,13 @@
             .hash = "zbench-0.11.2-YTdc7zolAQDlBF9i0ywXIvDjafL3Kg27S-aFUq6dU5zy",
         },
         .opentelemetry_proto = .{
-            .path = "deps/opentelemetry-proto",
+            .url = "git+https://github.com/zig-o11y/opentelemetry-proto?ref=main#c43bd4c4db96fd839c594b7b701b44866b19457e",
+            .hash = "opentelemetry_proto-1.10.3-S4Y0u6zjAgBXl5JQ75DnsV5L2DsJeRzbgbYLSDTkl-f9",
         },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "deps",
         "src",
         "examples",
         "benchmarks",
