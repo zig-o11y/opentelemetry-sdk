@@ -3,6 +3,7 @@
 // Modified to capture log output and prevent stderr messages during tests
 
 const std = @import("std");
+const runtime = @import("runtime");
 const builtin = @import("builtin");
 const test_options = @import("test_options");
 
@@ -15,14 +16,14 @@ var current_test: ?[]const u8 = null;
 
 // Thread-safe log buffer for capturing test logs
 const LogCapture = struct {
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
     buffer: std.ArrayList(u8),
     allocator: Allocator,
     enabled: bool = false,
 
     fn init(allocator: Allocator) LogCapture {
         return .{
-            .buffer = std.ArrayList(u8){},
+            .buffer = std.ArrayList(u8).empty,
             .allocator = allocator,
         };
     }
@@ -32,35 +33,35 @@ const LogCapture = struct {
     }
 
     fn enable(self: *LogCapture) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
         self.enabled = true;
         self.buffer.clearRetainingCapacity();
     }
 
     fn disable(self: *LogCapture) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
         self.enabled = false;
     }
 
     fn write(self: *LogCapture, bytes: []const u8) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
         if (self.enabled) {
             self.buffer.appendSlice(self.allocator, bytes) catch {};
         }
     }
 
     fn getContents(self: *LogCapture) []const u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
         return self.buffer.items;
     }
 
     fn contains(self: *LogCapture, needle: []const u8) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
         return std.mem.indexOf(u8, self.buffer.items, needle) != null;
     }
 };
@@ -105,7 +106,7 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
@@ -126,7 +127,7 @@ pub fn main() !void {
     var leak: usize = 0;
 
     var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.fs.File.stderr().writer(&stdout_buffer);
+    var stdout_writer = std.Io.File.stderr().writer(runtime.io(), &stdout_buffer);
 
     const printer = Printer.init(&stdout_writer.interface);
     try printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
@@ -235,9 +236,6 @@ pub fn main() !void {
                     try printer.fmt("Captured logs:\n{s}\n", .{captured_logs});
                 }
 
-                if (@errorReturnTrace()) |trace| {
-                    std.debug.dumpStackTrace(trace.*);
-                }
                 if (env.fail_first) {
                     break;
                 }
@@ -274,7 +272,7 @@ pub fn main() !void {
     try printer.fmt("\n", .{});
     try slowest.display(printer);
     try printer.fmt("\n", .{});
-    std.posix.exit(if (fail == 0) 0 else 1);
+    std.process.exit(if (fail == 0) 0 else 1);
 }
 
 const Printer = struct {
@@ -316,17 +314,18 @@ const Status = enum {
 
 const SlowTracker = struct {
     const SlowestQueue = std.PriorityDequeue(TestInfo, void, compareTiming);
+    allocator: Allocator,
     max: usize,
     slowest: SlowestQueue,
-    timer: std.time.Timer,
+    started_ns: i128,
 
     fn init(allocator: Allocator, count: u32) SlowTracker {
-        const timer = std.time.Timer.start() catch @panic("failed to start timer");
-        var slowest = SlowestQueue.init(allocator, {});
-        slowest.ensureTotalCapacity(count) catch @panic("OOM");
+        var slowest = SlowestQueue.initContext({});
+        slowest.ensureTotalCapacity(allocator, count) catch @panic("OOM");
         return .{
+            .allocator = allocator,
             .max = count,
-            .timer = timer,
+            .started_ns = runtime.nanoTimestamp(),
             .slowest = slowest,
         };
     }
@@ -336,24 +335,23 @@ const SlowTracker = struct {
         name: []const u8,
     };
 
-    fn deinit(self: SlowTracker) void {
-        self.slowest.deinit();
+    fn deinit(self: *SlowTracker) void {
+        self.slowest.deinit(self.allocator);
     }
 
     fn startTiming(self: *SlowTracker) void {
-        self.timer.reset();
+        self.started_ns = runtime.nanoTimestamp();
     }
 
     fn endTiming(self: *SlowTracker, test_name: []const u8) u64 {
-        var timer = self.timer;
-        const ns = timer.lap();
+        const ns: u64 = @intCast(runtime.nanoTimestamp() - self.started_ns);
 
         var slowest = &self.slowest;
 
         if (slowest.count() < self.max) {
             // Capacity is fixed to the # of slow tests we want to track
             // If we've tracked fewer tests than this capacity, than always add
-            slowest.add(TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
+            slowest.push(self.allocator, TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
             return ns;
         }
 
@@ -368,8 +366,8 @@ const SlowTracker = struct {
         }
 
         // the previous fastest of our slow tests, has been pushed off.
-        _ = slowest.removeMin();
-        slowest.add(TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
+        _ = slowest.popMin();
+        slowest.push(self.allocator, TestInfo{ .ns = ns, .name = test_name }) catch @panic("failed to track test timing");
         return ns;
     }
 
@@ -377,7 +375,7 @@ const SlowTracker = struct {
         var slowest = self.slowest;
         const count = slowest.count();
         try printer.fmt("Slowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
-        while (slowest.removeMinOrNull()) |info| {
+        while (slowest.popMin()) |info| {
             const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
             try printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });
         }

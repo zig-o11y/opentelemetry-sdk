@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const logs = @import("../../../api/logs/logger_provider.zig");
 const LogRecordExporter = @import("../log_record_exporter.zig").LogRecordExporter;
 const otlp = @import("../../../otlp.zig");
@@ -30,7 +31,7 @@ pub const OTLPExporter = struct {
     /// The config should be initialized with otlp.ConfigOptions.init() and supports
     /// environment variable configuration for endpoint, headers, compression, etc.
     pub fn init(allocator: std.mem.Allocator, config: *otlp.ConfigOptions) !*Self {
-        var env = try std.process.getEnvMap(allocator);
+        var env = try runtime.createEnvMap(allocator);
         defer env.deinit();
         try config.mergeFromEnvMap(&env);
 
@@ -82,7 +83,7 @@ pub const OTLPExporter = struct {
     }
 
     fn logsToOTLPRequest(self: *Self, log_records: []logs.ReadableLogRecord) !pbcollector_logs.ExportLogsServiceRequest {
-        var resource_logs = std.ArrayList(pblogs.ResourceLogs){};
+        var resource_logs = std.ArrayList(pblogs.ResourceLogs).empty;
 
         // Group log records by instrumentation scope
         var scope_groups = std.HashMap(
@@ -104,19 +105,19 @@ pub const OTLPExporter = struct {
             const scope_key = log_record.scope;
             const result = try scope_groups.getOrPut(scope_key);
             if (!result.found_existing) {
-                result.value_ptr.* = std.ArrayList(logs.ReadableLogRecord){};
+                result.value_ptr.* = std.ArrayList(logs.ReadableLogRecord).empty;
             }
             try result.value_ptr.append(self.allocator, log_record);
         }
 
-        var scope_logs_list = std.ArrayList(pblogs.ScopeLogs){};
+        var scope_logs_list = std.ArrayList(pblogs.ScopeLogs).empty;
 
         // Convert each scope group to OTLP format
         var scope_iterator = scope_groups.iterator();
         while (scope_iterator.next()) |entry| {
             const scope_log_records = entry.value_ptr.*;
 
-            var otlp_log_records = std.ArrayList(pblogs.LogRecord){};
+            var otlp_log_records = std.ArrayList(pblogs.LogRecord).empty;
 
             // Convert each log record to OTLP format
             for (scope_log_records.items) |log_record| {
@@ -135,7 +136,7 @@ pub const OTLPExporter = struct {
                     .attributes = null,
                 };
 
-            var scope_attributes = std.ArrayList(pbcommon.KeyValue){};
+            var scope_attributes = std.ArrayList(pbcommon.KeyValue).empty;
             if (scope_info.attributes) |attrs| {
                 for (attrs) |attr| {
                     const key_value = try attributeToOTLP(attr.key, attr.value);
@@ -157,7 +158,7 @@ pub const OTLPExporter = struct {
         }
 
         // Build resource from first log record (all share same resource from provider)
-        var resource_attributes = std.ArrayList(pbcommon.KeyValue){};
+        var resource_attributes = std.ArrayList(pbcommon.KeyValue).empty;
         if (log_records.len > 0) {
             if (log_records[0].resource) |attrs| {
                 for (attrs) |attr| {
@@ -171,7 +172,7 @@ pub const OTLPExporter = struct {
             .resource = pbresource.Resource{
                 .attributes = resource_attributes,
                 .dropped_attributes_count = 0,
-                .entity_refs = std.ArrayList(pbcommon.EntityRef){},
+                .entity_refs = std.ArrayList(pbcommon.EntityRef).empty,
             },
             .scope_logs = scope_logs_list,
             .schema_url = (""),
@@ -213,7 +214,7 @@ pub const OTLPExporter = struct {
 
     fn logRecordToOTLP(self: *Self, log_record: logs.ReadableLogRecord) !pblogs.LogRecord {
         // Convert attributes
-        var attributes = std.ArrayList(pbcommon.KeyValue){};
+        var attributes = std.ArrayList(pbcommon.KeyValue).empty;
         for (log_record.attributes) |attr| {
             const key_value = try attributeToOTLP(attr.key, attr.value);
             try attributes.append(self.allocator, key_value);

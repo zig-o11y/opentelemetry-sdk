@@ -4,6 +4,7 @@
 //! to a file in JSON Lines format.
 
 const std = @import("std");
+const runtime = @import("runtime");
 
 const log = std.log.scoped(.file_exporter);
 
@@ -27,7 +28,7 @@ pub const FileExporter = struct {
 
     allocator: std.mem.Allocator,
     resource: Resource,
-    file: std.fs.File,
+    file: std.Io.File,
     owns_file: bool,
 
     pub const Options = struct {
@@ -39,12 +40,12 @@ pub const FileExporter = struct {
 
     pub fn init(allocator: std.mem.Allocator, resource: Resource, options: Options) !Self {
         const file = if (options.file_path) |path| blk: {
-            const flags: std.fs.File.CreateFlags = if (options.append)
+            const flags: std.Io.Dir.CreateFileOptions = if (options.append)
                 .{ .read = true, .truncate = false }
             else
                 .{ .read = true, .truncate = true };
-            break :blk try std.fs.cwd().createFile(path, flags);
-        } else std.io.getStdOut();
+            break :blk try runtime.fs.cwdCreateFile(path, flags);
+        } else std.Io.File.stdout();
 
         return Self{
             .allocator = allocator,
@@ -56,7 +57,7 @@ pub const FileExporter = struct {
 
     pub fn deinit(self: *Self) void {
         if (self.owns_file) {
-            self.file.close();
+            self.file.close(runtime.io());
         }
     }
 
@@ -74,19 +75,19 @@ pub const FileExporter = struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
 
         // Convert spans to OTLP protobuf format
-        var pb_spans = std.ArrayList(pbtrace.Span).init(self.allocator);
-        defer pb_spans.deinit();
+        var pb_spans: std.ArrayList(pbtrace.Span) = .empty;
+        defer pb_spans.deinit(self.allocator);
 
         for (spans) |span| {
             const pb_span = try toProtobufSpan(self.allocator, span);
-            try pb_spans.append(pb_span);
+            try pb_spans.append(self.allocator, pb_span);
         }
 
         // Build scope spans
-        var scope_spans = std.ArrayList(pbtrace.ScopeSpans).init(self.allocator);
-        defer scope_spans.deinit();
+        var scope_spans: std.ArrayList(pbtrace.ScopeSpans) = .empty;
+        defer scope_spans.deinit(self.allocator);
 
-        try scope_spans.append(pbtrace.ScopeSpans{
+        try scope_spans.append(self.allocator, pbtrace.ScopeSpans{
             .scope = .{
                 .name = "",
                 .version = "",
@@ -98,10 +99,10 @@ pub const FileExporter = struct {
         // Build resource spans
         const pb_resource = try toProtobufResource(self.allocator, self.resource);
 
-        var resource_spans = std.ArrayList(pbtrace.ResourceSpans).init(self.allocator);
-        defer resource_spans.deinit();
+        var resource_spans: std.ArrayList(pbtrace.ResourceSpans) = .empty;
+        defer resource_spans.deinit(self.allocator);
 
-        try resource_spans.append(pbtrace.ResourceSpans{
+        try resource_spans.append(self.allocator, pbtrace.ResourceSpans{
             .resource = pb_resource,
             .scope_spans = scope_spans,
             .schema_url = "",
@@ -124,7 +125,7 @@ pub const FileExporter = struct {
     pub fn shutdown(ctx: *anyopaque) anyerror!void {
         const self: *Self = @ptrCast(@alignCast(ctx));
         if (self.owns_file) {
-            self.file.close();
+            self.file.close(runtime.io());
         }
     }
 };

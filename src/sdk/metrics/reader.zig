@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 
 const log = std.log.scoped(.reader);
 
@@ -66,7 +67,7 @@ pub const MetricReader = struct {
 
     // Signal that shutdown has been called.
     hasShutDown: bool = false,
-    mx: std.Thread.Mutex = std.Thread.Mutex{},
+    mx: std.Io.Mutex = std.Io.Mutex.init,
 
     const Self = @This();
 
@@ -91,8 +92,8 @@ pub const MetricReader = struct {
         if (!self.mx.tryLock()) {
             return MetricReadError.ConcurrentCollectNotAllowed;
         }
-        defer self.mx.unlock();
-        var toBeExported = std.ArrayList(Measurements){};
+        defer self.mx.unlock(runtime.io());
+        var toBeExported = std.ArrayList(Measurements).empty;
         defer toBeExported.deinit(self.allocator);
 
         if (self.meterProvider) |mp| {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const context = @import("../../api/context.zig");
 const SpanProcessor = @import("span_processor.zig").SpanProcessor;
 const BatchingProcessor = @import("span_processor.zig").BatchingProcessor;
@@ -35,7 +36,7 @@ pub const TracerProvider = struct {
     ),
     processors: std.ArrayList(SpanProcessor),
     id_generator: IDGenerator,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
     is_shutdown: std.atomic.Value(bool),
     // Interface implementation
     tracer_provider: TracerProviderAPI,
@@ -55,9 +56,9 @@ pub const TracerProvider = struct {
         self.* = Self{
             .allocator = allocator,
             .tracers = .empty,
-            .processors = std.ArrayList(SpanProcessor){},
+            .processors = std.ArrayList(SpanProcessor).empty,
             .id_generator = id_generator,
-            .mutex = std.Thread.Mutex{},
+            .mutex = std.Io.Mutex.init,
             .is_shutdown = std.atomic.Value(bool).init(false),
             .tracer_provider = TracerProviderAPI{
                 .getTracerFn = getTracerImpl,
@@ -127,8 +128,8 @@ pub const TracerProvider = struct {
             return error.TracerProviderShutdown;
         }
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
 
         try self.processors.append(self.allocator, processor);
     }
@@ -139,8 +140,8 @@ pub const TracerProvider = struct {
             return error.TracerProviderShutdown;
         }
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
 
         // Check if we already have a Tracer for this scope
         if (self.tracers.get(scope)) |existing_tracer| {
@@ -163,7 +164,7 @@ pub const TracerProvider = struct {
             return; // Already shutdown
         }
 
-        self.mutex.lock();
+        self.mutex.lockUncancelable(runtime.io());
 
         // Shutdown all processors
         for (self.processors.items) |processor| {
@@ -188,7 +189,7 @@ pub const TracerProvider = struct {
         }
 
         // Unlock before destroying the struct
-        self.mutex.unlock();
+        self.mutex.unlock(runtime.io());
 
         // Destroy self
         self.allocator.destroy(self);
@@ -200,8 +201,8 @@ pub const TracerProvider = struct {
             return error.TracerProviderShutdown;
         }
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
 
         for (self.processors.items) |processor| {
             try processor.forceFlush();
@@ -212,8 +213,8 @@ pub const TracerProvider = struct {
     pub fn onSpanStart(self: *Self, span: *trace_api.Span, parent_context: context.Context) void {
         if (self.sdk_disabled or self.is_shutdown.load(.acquire)) return;
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
 
         for (self.processors.items) |processor| {
             processor.onStart(span, parent_context);
@@ -224,8 +225,8 @@ pub const TracerProvider = struct {
     pub fn onSpanEnd(self: *Self, span: trace_api.Span) void {
         if (self.sdk_disabled or self.is_shutdown.load(.acquire)) return;
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
 
         for (self.processors.items) |processor| {
             processor.onEnd(span);
@@ -325,7 +326,7 @@ pub const Tracer = struct {
         }
 
         // Set start time if provided, otherwise use current time
-        span.start_time_unix_nano = options.start_timestamp orelse @intCast(std.time.nanoTimestamp());
+        span.start_time_unix_nano = options.start_timestamp orelse @intCast(runtime.nanoTimestamp());
 
         // Notify processors that the span has started
         const parent_context = options.parent_context orelse context.Context.init();
@@ -390,8 +391,8 @@ const MockProcessor = struct {
     pub fn init(allocator: std.mem.Allocator) @This() {
         return @This(){
             .allocator = allocator,
-            .started_spans = std.ArrayList(*trace_api.Span){},
-            .ended_spans = std.ArrayList(trace_api.Span){},
+            .started_spans = std.ArrayList(*trace_api.Span).empty,
+            .ended_spans = std.ArrayList(trace_api.Span).empty,
         };
     }
 

@@ -4,6 +4,7 @@
 //! to a file in JSON Lines format.
 
 const std = @import("std");
+const runtime = @import("runtime");
 
 const log = std.log.scoped(.file_exporter);
 
@@ -32,7 +33,7 @@ pub const FileExporter = struct {
     allocator: std.mem.Allocator,
     exporter: ExporterImpl,
     temporality: view.TemporalitySelector,
-    file: std.fs.File,
+    file: std.Io.File,
     owns_file: bool,
 
     pub const Options = struct {
@@ -44,12 +45,12 @@ pub const FileExporter = struct {
 
     pub fn init(allocator: std.mem.Allocator, temporality: view.TemporalitySelector, options: Options) !*Self {
         const file = if (options.file_path) |path| blk: {
-            const flags: std.fs.File.CreateFlags = if (options.append)
+            const flags: std.Io.Dir.CreateFileOptions = if (options.append)
                 .{ .read = true, .truncate = false }
             else
                 .{ .read = true, .truncate = true };
-            break :blk try std.fs.cwd().createFile(path, flags);
-        } else std.fs.File.stdout();
+            break :blk try runtime.fs.cwdCreateFile(path, flags);
+        } else std.Io.File.stdout();
 
         const self = try allocator.create(Self);
         self.* = Self{
@@ -66,7 +67,7 @@ pub const FileExporter = struct {
 
     pub fn deinit(self: *Self) void {
         if (self.owns_file) {
-            self.file.close();
+            self.file.close(runtime.io());
         }
         self.allocator.destroy(self);
     }
@@ -148,8 +149,8 @@ test "FileExporter export to file" {
     const test_file = "test_metrics_file.jsonl";
 
     // Clean up any existing test file
-    std.fs.cwd().deleteFile(test_file) catch {};
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    runtime.fs.cwdDeleteFile(test_file) catch {};
+    defer runtime.fs.cwdDeleteFile(test_file) catch {};
 
     const file_exporter = try FileExporter.init(allocator, view.DefaultTemporality, .{
         .file_path = test_file,
@@ -180,16 +181,18 @@ test "FileExporter export to file" {
     try file_exporter.exporter.exportFn(&file_exporter.exporter, metrics);
 
     // Verify the file was created and contains data
-    const file = try std.fs.cwd().openFile(test_file, .{});
-    defer file.close();
+    const file = try runtime.fs.cwdOpenFile(test_file, .{});
+    defer file.close(runtime.io());
 
-    const stat = try file.stat();
+    const stat = try file.stat(runtime.io());
     try std.testing.expect(stat.size > 0);
 
-    const content = try file.readToEndAlloc(allocator, 1024 * 1024);
+    const content = try allocator.alloc(u8, @intCast(stat.size));
     defer allocator.free(content);
+    const content_len = try file.readPositionalAll(runtime.io(), content, 0);
+    const content_slice = content[0..content_len];
 
     // Should contain expected JSON fields
-    try std.testing.expect(std.mem.indexOf(u8, content, "resourceMetrics") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "test-counter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content_slice, "resourceMetrics") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content_slice, "test-counter") != null);
 }

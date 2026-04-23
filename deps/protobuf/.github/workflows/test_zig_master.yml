@@ -1,0 +1,44 @@
+name: test_and_lint_latest_zig
+on:
+  push:
+    branches:
+      - zig-master
+  pull_request:
+    branches:
+      - zig-master
+jobs:
+  test_latest:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{matrix.os}}
+    steps:
+      - uses: actions/checkout@v2
+      - uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: master
+      - run: zig build
+      - run: zig build test
+
+
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: master
+      - run: zig build test
+      - run: zig build bootstrap
+      - run: zig build test
+      - run: zig build
+      - run: git diff
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: master
+      - run: zig fmt --check src/protobuf.zig

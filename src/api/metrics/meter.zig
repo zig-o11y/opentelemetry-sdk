@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 
 const log = std.log.scoped(.meter);
 
@@ -51,7 +52,7 @@ pub const MeterProvider = struct {
     // Resource attributes for this provider
     resource: ?[]const Attribute = null,
 
-    mx: std.Thread.Mutex = std.Thread.Mutex{},
+    mx: std.Io.Mutex = std.Io.Mutex.init,
 
     const Self = @This();
 
@@ -91,7 +92,7 @@ pub const MeterProvider = struct {
     /// Delete the meter provider and free up the memory allocated for it,
     /// as well as its owned Meters.
     pub fn shutdown(self: *Self) void {
-        self.mx.lock();
+        self.mx.lockUncancelable(runtime.io());
 
         var meters = self.meters.valueIterator();
         while (meters.next()) |m| {
@@ -108,7 +109,7 @@ pub const MeterProvider = struct {
         }
 
         // Unlock before destroying the struct
-        self.mx.unlock();
+        self.mx.unlock(runtime.io());
         self.allocator.destroy(self);
     }
 
@@ -118,8 +119,8 @@ pub const MeterProvider = struct {
     /// If a meter with the same name already exists, it will be returned.
     /// See https://opentelemetry.io/docs/specs/otel/metrics/api/#get-a-meter
     pub fn getMeter(self: *Self, scope: InstrumentationScope) !*Meter {
-        self.mx.lock();
-        defer self.mx.unlock();
+        self.mx.lockUncancelable(runtime.io());
+        defer self.mx.unlock(runtime.io());
 
         const i = Meter{
             .scope = scope,
@@ -133,8 +134,8 @@ pub const MeterProvider = struct {
     }
 
     pub fn addReader(self: *Self, m: *MetricReader) !void {
-        self.mx.lock();
-        defer self.mx.unlock();
+        self.mx.lockUncancelable(runtime.io());
+        defer self.mx.unlock(runtime.io());
 
         if (m.meterProvider != null) {
             return spec.ResourceError.MetricReaderAlreadyAttached;
@@ -145,8 +146,8 @@ pub const MeterProvider = struct {
 
     /// Register a view with this meter provider
     pub fn addView(self: *Self, new_view: view.View) !void {
-        self.mx.lock();
-        defer self.mx.unlock();
+        self.mx.lockUncancelable(runtime.io());
+        defer self.mx.unlock(runtime.io());
 
         try self.views.append(self.allocator, new_view);
     }
@@ -174,7 +175,7 @@ pub const Meter = struct {
     instruments: std.StringHashMapUnmanaged(*Instrument),
     allocator: std.mem.Allocator,
 
-    mx: std.Thread.Mutex = std.Thread.Mutex{},
+    mx: std.Io.Mutex = std.Io.Mutex.init,
 
     const Self = @This();
 
@@ -277,8 +278,8 @@ pub const Meter = struct {
     // Name is case-insensitive.
     // The remaining are also forming the identifier.
     fn registerInstrument(self: *Self, instrument: *Instrument) !void {
-        self.mx.lock();
-        defer self.mx.unlock();
+        self.mx.lockUncancelable(runtime.io());
+        defer self.mx.unlock(runtime.io());
 
         const id = try spec.instrumentIdentifier(
             self.allocator,
@@ -510,18 +511,18 @@ const view = @import("../../sdk/metrics/view.zig");
 /// MetricReader's temporality and aggregation functions.
 pub const AggregatedMetrics = struct {
     fn sum(comptime T: type, data_points: []DataPoint(T), current_time: u64, allocator: std.mem.Allocator) ![]DataPoint(T) {
-        var deduped = std.ArrayHashMap(
+        var deduped = std.ArrayHashMapUnmanaged(
             Attributes,
             DataPoint(T),
             Attributes.ArrayHashContext,
             true,
-        ).init(allocator);
+        ).empty;
         // No need to cleanup the keys, they are reference to the same Attribute slices from data_points.
-        defer deduped.deinit();
+        defer deduped.deinit(allocator);
 
         for (data_points) |dp| {
             const key = Attributes.with(dp.attributes);
-            const gop = try deduped.getOrPut(key);
+            const gop = try deduped.getOrPut(allocator, key);
             if (!gop.found_existing) gop.value_ptr.* = try dp.deepCopy(allocator) else gop.value_ptr.*.value += dp.value;
             // Add timestamps that will be used in temporal aggregation.
             gop.value_ptr.*.timestamps = .{ .start_time_ns = current_time, .time_ns = current_time };
@@ -530,20 +531,20 @@ pub const AggregatedMetrics = struct {
     }
 
     fn lastValue(comptime T: type, data_points: []DataPoint(T), current_time: u64, allocator: std.mem.Allocator) ![]DataPoint(T) {
-        var deduped = std.ArrayHashMap(
+        var deduped = std.ArrayHashMapUnmanaged(
             Attributes,
             DataPoint(T),
             Attributes.ArrayHashContext,
             true,
-        ).init(allocator);
-        defer deduped.deinit();
+        ).empty;
+        defer deduped.deinit(allocator);
 
         for (data_points) |dp| {
             var duped = try dp.deepCopy(allocator);
             // Add timestamps that will be used in temporal aggregation.
             duped.timestamps = .{ .start_time_ns = current_time, .time_ns = current_time };
 
-            try deduped.put(Attributes.with(dp.attributes), duped);
+            try deduped.put(allocator, Attributes.with(dp.attributes), duped);
         }
         return allocator.dupe(DataPoint(T), deduped.values());
     }
@@ -565,7 +566,7 @@ pub const AggregatedMetrics = struct {
             }
         }
 
-        const current_time: u64 = @intCast(std.time.nanoTimestamp());
+        const current_time: u64 = @intCast(runtime.nanoTimestamp());
 
         // Processing pipeline is split by aggregation type
         const aggregated: ?MeasurementsData = switch (aggregation_type.getType()) {
@@ -643,10 +644,10 @@ pub const AggregatedMetrics = struct {
     /// Caller owns the returned memory and it should be freed using the AggregatedMetrics allocator.
     /// If aggregation_override is provided, it takes precedence over the view system.
     pub fn fetch(allocator: std.mem.Allocator, meter: *Meter, views: []const view.View, aggregation_override: ?view.AggregationSelector) ![]Measurements {
-        meter.mx.lock();
-        defer meter.mx.unlock();
+        meter.mx.lockUncancelable(runtime.io());
+        defer meter.mx.unlock(runtime.io());
 
-        var results = std.ArrayList(Measurements){};
+        var results = std.ArrayList(Measurements).empty;
 
         var iter = meter.instruments.valueIterator();
         while (iter.next()) |instr| {

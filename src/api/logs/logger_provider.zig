@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const LogRecordExporter = @import("../../sdk/logs/log_record_exporter.zig").LogRecordExporter;
 const SimpleLogRecordProcessor = @import("../../sdk/logs/log_record_processor.zig").SimpleLogRecordProcessor;
 const BatchingLogRecordProcessor = @import("../../sdk/logs/log_record_processor.zig").BatchingLogRecordProcessor;
@@ -34,13 +35,13 @@ pub const ReadWriteLogRecord = struct {
     pub fn init(scope: InstrumentationScope) Self {
         return Self{
             .timestamp = null,
-            .observed_timestamp = @intCast(std.time.nanoTimestamp()),
+            .observed_timestamp = @intCast(runtime.nanoTimestamp()),
             .trace_id = null,
             .span_id = null,
             .severity_number = null,
             .severity_text = null,
             .body = null,
-            .attributes = std.ArrayListUnmanaged(Attribute){},
+            .attributes = .empty,
             .resource = null,
             .scope = scope,
         };
@@ -126,7 +127,7 @@ pub const LoggerProvider = struct {
     resource: ?[]const Attribute,
     is_shutdown: std.atomic.Value(bool),
     sdk_disabled: bool,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
     config: ?*const Configuration,
 
     const Self = @This();
@@ -155,11 +156,11 @@ pub const LoggerProvider = struct {
                 InstrumentationScope.HashContext,
                 std.hash_map.default_max_load_percentage,
             ){},
-            .processors = std.ArrayListUnmanaged(LogRecordProcessor){},
+            .processors = .empty,
             .resource = merged_resource,
             .is_shutdown = std.atomic.Value(bool).init(false),
             .sdk_disabled = sdk_disabled,
-            .mutex = std.Thread.Mutex{},
+            .mutex = std.Io.Mutex.init,
             .config = cfg,
         };
 
@@ -186,8 +187,8 @@ pub const LoggerProvider = struct {
     }
 
     pub fn addLogRecordProcessor(self: *Self, processor: LogRecordProcessor) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
 
         if (self.is_shutdown.load(.acquire)) {
             return error.LoggerProviderShutdown;
@@ -197,8 +198,8 @@ pub const LoggerProvider = struct {
     }
 
     pub fn getLogger(self: *Self, scope: InstrumentationScope) !*Logger {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
 
         if (self.is_shutdown.load(.acquire)) {
             return error.LoggerProviderShutdown;
@@ -218,8 +219,8 @@ pub const LoggerProvider = struct {
             return; // Already shutdown
         }
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
 
         // Shutdown all processors
         for (self.processors.items) |processor| {
@@ -230,8 +231,8 @@ pub const LoggerProvider = struct {
     }
 
     pub fn forceFlush(self: *Self) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(runtime.io());
+        defer self.mutex.unlock(runtime.io());
 
         if (self.is_shutdown.load(.acquire)) {
             return error.LoggerProviderShutdown;
@@ -312,8 +313,8 @@ pub const Logger = struct {
 
         // Call processors in order
         const ctx = Context.init();
-        self.provider.mutex.lock();
-        defer self.provider.mutex.unlock();
+        self.provider.mutex.lockUncancelable(runtime.io());
+        defer self.provider.mutex.unlock(runtime.io());
 
         for (self.provider.processors.items) |processor| {
             processor.onEmit(&log_record, ctx);
@@ -351,8 +352,8 @@ pub const Logger = struct {
         };
 
         // Check with processors - if ANY processor would process it, return true
-        self.provider.mutex.lock();
-        defer self.provider.mutex.unlock();
+        self.provider.mutex.lockUncancelable(runtime.io());
+        defer self.provider.mutex.unlock(runtime.io());
 
         for (self.provider.processors.items) |processor| {
             if (processor.enabled(full_params)) {

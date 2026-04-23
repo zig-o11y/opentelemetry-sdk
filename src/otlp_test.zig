@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const http = std.http;
 
 const log = std.log.scoped(.otlp_test);
@@ -242,7 +243,7 @@ fn oneDataPointMetricsExportRequest(allocator: std.mem.Allocator, data_point_att
     var data_points = try allocator.alloc(pbmetrics.NumberDataPoint, 1);
     const data_points0 = pbmetrics.NumberDataPoint{
         .value = .{ .as_int = 42 },
-        .start_time_unix_nano = @intCast(std.time.nanoTimestamp()),
+        .start_time_unix_nano = @intCast(runtime.nanoTimestamp()),
         .attributes = pb_attrs.values,
         .exemplars = .empty,
     };
@@ -439,7 +440,7 @@ const HTTPTestServer = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
-    net_server: std.net.Server,
+    net_server: std.Io.net.Server,
     behavior: serverBehavior,
 
     fn init(
@@ -448,8 +449,8 @@ const HTTPTestServer = struct {
     ) !*Self {
         const test_server = try allocator.create(HTTPTestServer);
         // Randomized port, can be fetched with port()
-        const address = try std.net.Address.parseIp("127.0.0.1", 0);
-        const net_server = try address.listen(.{ .reuse_address = true });
+        const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+        const net_server = try address.listen(runtime.io(), .{ .reuse_address = true });
 
         test_server.* = HTTPTestServer{
             .allocator = allocator,
@@ -461,17 +462,17 @@ const HTTPTestServer = struct {
     }
 
     fn processSingleRequest(self: *Self) void {
-        const connection = self.net_server.accept() catch |err| {
+        var stream = self.net_server.accept(runtime.io()) catch |err| {
             log.err("Error starting HTTP server: {}", .{err});
             return;
         };
-        defer connection.stream.close();
+        defer stream.close(runtime.io());
 
         var read_buffer: [8192]u8 = undefined;
         var write_buffer: [8192]u8 = undefined;
-        var conn_reader = connection.stream.reader(&read_buffer);
-        var conn_writer = connection.stream.writer(&write_buffer);
-        var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
+        var conn_reader = stream.reader(runtime.io(), &read_buffer);
+        var conn_writer = stream.writer(runtime.io(), &write_buffer);
+        var http_server = std.http.Server.init(&conn_reader.interface, &conn_writer.interface);
 
         var request = http_server.receiveHead() catch |err| {
             log.err("Error receiving HTTP request: {}", .{err});
@@ -485,19 +486,19 @@ const HTTPTestServer = struct {
 
     fn processRequests(self: *Self, maxRequests: usize, reqCounter: *std.atomic.Value(usize)) void {
         while (reqCounter.load(.acquire) < maxRequests) {
-            const connection = self.net_server.accept() catch |err| {
+            var stream = self.net_server.accept(runtime.io()) catch |err| {
                 log.err("Error starting HTTP server: {}", .{err});
                 return;
             };
-            defer connection.stream.close();
+            defer stream.close(runtime.io());
 
             const reqNumber = reqCounter.fetchAdd(1, .acq_rel);
 
             var read_buffer: [8192]u8 = undefined;
             var write_buffer: [8192]u8 = undefined;
-            var conn_reader = connection.stream.reader(&read_buffer);
-            var conn_writer = connection.stream.writer(&write_buffer);
-            var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
+            var conn_reader = stream.reader(runtime.io(), &read_buffer);
+            var conn_writer = stream.writer(runtime.io(), &write_buffer);
+            var http_server = std.http.Server.init(&conn_reader.interface, &conn_writer.interface);
 
             var request = http_server.receiveHead() catch |err| {
                 log.err("Error receiving HTTP request: {}", .{err});
@@ -513,11 +514,11 @@ const HTTPTestServer = struct {
     }
 
     fn port(self: Self) u16 {
-        return self.net_server.listen_address.in.getPort();
+        return self.net_server.socket.address.getPort();
     }
 
     fn deinit(self: *Self) void {
-        self.net_server.deinit();
+        self.net_server.deinit(runtime.io());
         self.allocator.destroy(self);
     }
 };
@@ -528,7 +529,7 @@ test "otlp ExportFile appends metrics to file" {
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    var file = try temp_dir.dir.createFile("metrics.jsonl", .{
+    var file = try temp_dir.dir.createFile(runtime.io(), "metrics.jsonl", .{
         .read = true,
         .exclusive = true,
     });
@@ -541,19 +542,20 @@ test "otlp ExportFile appends metrics to file" {
         try otlp.ExportFile(allocator, otlp.Signal.Data{ .metrics = req }, &file);
     }
 
-    file.close();
+    file.close(runtime.io());
 
     // Re-open the file for reading
-    var filer = try temp_dir.dir.openFile("metrics.jsonl", .{});
-    defer filer.close();
+    var filer = try temp_dir.dir.openFile(runtime.io(), "metrics.jsonl", .{});
+    defer filer.close(runtime.io());
 
     // Verify that the file was created and has content
-    try std.testing.expect(try file.getEndPos() > 0);
+    const stat = try filer.stat(runtime.io());
+    try std.testing.expect(stat.size > 0);
 
     // TODO more assertions
 
     var buffer: [4096]u8 = undefined;
-    var reader = filer.reader(&buffer);
+    var reader = filer.reader(runtime.io(), &buffer);
     var lines_count: usize = 0;
     while (try reader.interface.takeDelimiter('\n')) |_| {
         // Basic validation that we received a non-empty JSON line

@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 
 const log = std.log.scoped(.exporter);
 
@@ -47,7 +48,7 @@ pub const MetricExporter = struct {
 
     // Lock helper to signal shutdown and/or export is in progress
     hasShutDown: bool = false,
-    exportCompleted: std.Thread.Mutex = std.Thread.Mutex{},
+    exportCompleted: std.Io.Mutex = std.Io.Mutex.init,
 
     /// Creates a new MetricExporter, providing an allocator and an exporter implementation.
     /// Use this function to plug a custom exporter implementation.
@@ -147,8 +148,8 @@ pub const MetricExporter = struct {
         }
         // Acquire the lock to signal to forceFlush to wait for export to complete.
         // Also, guarantee that only one export operation is in progress at any time.
-        self.exportCompleted.lock();
-        defer self.exportCompleted.unlock();
+        self.exportCompleted.lockUncancelable(runtime.io());
+        defer self.exportCompleted.unlock(runtime.io());
 
         // Little trick to timeout the export operation if needed.
         if (timeout_ms) |timeout| {
@@ -170,16 +171,16 @@ pub const MetricExporter = struct {
 
     const ExportState = struct {
         result: ?ExportResult = null,
-        mutex: std.Thread.Mutex = .{},
-        cond: std.Thread.Condition = .{},
+        mutex: std.Io.Mutex = .init,
+        done: std.Io.Event = .unset,
     };
 
     fn exportWorker(self: *Self, metrics: []Measurements, state: *ExportState) void {
         const result = self.exportBatchInternal(metrics);
-        state.mutex.lock();
-        defer state.mutex.unlock();
+        state.mutex.lockUncancelable(runtime.io());
+        defer state.mutex.unlock(runtime.io());
         state.result = result;
-        state.cond.signal();
+        state.done.set(runtime.io());
     }
 
     fn exportBatchWithTimeout(self: *Self, metrics: []Measurements, timeout_ms: u64) ExportResult {
@@ -194,10 +195,7 @@ pub const MetricExporter = struct {
             return self.exportBatchInternal(metrics);
         };
 
-        state.mutex.lock();
-        const timeout_ns = timeout_ms * std.time.ns_per_ms;
-        const timed_out = if (state.cond.timedWait(&state.mutex, timeout_ns)) |_| false else |_| true;
-        state.mutex.unlock();
+        const timed_out = state.done.waitTimeout(runtime.io(), runtime.timeoutAfterMs(timeout_ms)) == error.Timeout;
 
         if (timed_out) {
             // Timeout occurred - we still need to wait for the thread to finish
@@ -219,14 +217,14 @@ pub const MetricExporter = struct {
 
     // Ensure that all the data is flushed to the destination.
     pub fn forceFlush(self: *Self, timeout_ms: u64) !void {
-        const start = std.time.milliTimestamp(); // Milliseconds
+        const start = runtime.milliTimestamp(); // Milliseconds
         const timeout: i64 = @intCast(timeout_ms);
-        while (std.time.milliTimestamp() < start + timeout) {
+        while (runtime.milliTimestamp() < start + timeout) {
             if (self.exportCompleted.tryLock()) {
-                self.exportCompleted.unlock();
+                self.exportCompleted.unlock(runtime.io());
                 return;
             } else {
-                std.Thread.sleep(std.time.ns_per_ms);
+                runtime.sleep(std.time.ns_per_ms);
             }
         }
         return MetricReadError.ForceFlushTimedOut;
@@ -263,7 +261,7 @@ fn mockExporter(_: *ExporterImpl, metrics: []Measurements) MetricReadError!void 
 // test harness to build an exporter that times out.
 fn waiterExporter(_: *ExporterImpl, _: []Measurements) MetricReadError!void {
     // Sleep for 1 second to simulate a slow exporter.
-    std.Thread.sleep(std.time.ns_per_ms * 1000);
+    runtime.sleep(std.time.ns_per_ms * 1000);
     return;
 }
 
@@ -372,7 +370,7 @@ test "metric exporter exportBatch with timeout" {
     const SlowExporter = struct {
         fn exportFn(_: *ExporterImpl, metrics: []Measurements) MetricReadError!void {
             // Sleep for 100ms to simulate slow export
-            std.Thread.sleep(100 * std.time.ns_per_ms);
+            runtime.sleep(100 * std.time.ns_per_ms);
             // Just free the metrics array, not the contents (they're stack-allocated in test)
             allocator.free(metrics);
         }
@@ -480,8 +478,8 @@ pub const ExporterImpl = struct {
 // with the shutdown of the PeriodicExportingReader.
 const ReaderShared = struct {
     shuttingDown: bool = false,
-    cond: std.Thread.Condition = .{},
-    lock: std.Thread.Mutex = .{},
+    wake: std.Io.Event = .unset,
+    lock: std.Io.Mutex = .init,
 };
 
 /// A periodic exporting reader is a specialization of MetricReader
@@ -541,10 +539,10 @@ pub const PeriodicExportingReader = struct {
     }
 
     pub fn shutdown(self: *Self) void {
-        self.shared.lock.lock();
+        self.shared.lock.lockUncancelable(runtime.io());
         self.shared.shuttingDown = true;
-        self.shared.lock.unlock();
-        self.shared.cond.signal();
+        self.shared.lock.unlock(runtime.io());
+        self.shared.wake.set(runtime.io());
         self.collectThread.join();
 
         self.reader.shutdown();
@@ -563,10 +561,15 @@ fn collectAndExport(
     exportIntervalMillis: u64,
     _: u64, // exportTimeoutMillis - no longer used here, configured on the reader
 ) void {
-    shared.lock.lock();
-    defer shared.lock.unlock();
-    // The execution should continue until the reader is shutting down
-    while (!shared.shuttingDown) {
+    while (true) {
+        shared.lock.lockUncancelable(runtime.io());
+        if (shared.shuttingDown) {
+            shared.lock.unlock(runtime.io());
+            break;
+        }
+        shared.wake.reset();
+        shared.lock.unlock(runtime.io());
+
         if (reader.meterProvider) |_| {
             // This will call exporter.exportBatch() with the configured timeout.
             reader.collect() catch |e| {
@@ -575,11 +578,7 @@ fn collectAndExport(
         } else {
             log.warn("PeriodicExportingReader: no meter provider is registered with this MetricReader {any}", .{reader});
         }
-        // timedWait returns an error when the timeout is reached waiting for a signal, so we catch it and continue.
-        // This is a way of keeping the timer running, becaus no other wake up signal is sent other than
-        // during shutdown.
-        // When the signal is actually received, the while loop exits because shared.shuttingDown has been set to true.
-        shared.cond.timedWait(&shared.lock, exportIntervalMillis * std.time.ns_per_ms) catch continue;
+        _ = shared.wake.waitTimeout(runtime.io(), runtime.timeoutAfterMs(exportIntervalMillis)) catch {};
     }
 }
 
@@ -626,7 +625,7 @@ test "e2e periodic exporting metric reader" {
 
     // Need to wait for the PeriodicExportingReader to collect and export the metrics.
     // Wait for more than 1 collection cycle to ensure that no duplication of data points occurs.
-    std.Thread.sleep(waiting_ms * 4 * std.time.ns_per_ms);
+    runtime.sleep(waiting_ms * 4 * std.time.ns_per_ms);
 
     const data = try inMem.fetch(allocator);
     defer {

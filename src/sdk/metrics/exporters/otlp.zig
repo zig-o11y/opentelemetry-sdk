@@ -1,6 +1,7 @@
 //! OTLP exporter for metrics.
 
 const std = @import("std");
+const runtime = @import("runtime");
 
 const log = std.log.scoped(.otlp_exporter);
 
@@ -46,7 +47,7 @@ pub const OTLPExporter = struct {
     config: *otlp.ConfigOptions,
 
     pub fn init(allocator: std.mem.Allocator, config: *otlp.ConfigOptions, temporality: view.TemporalitySelector) !*Self {
-        var env = try std.process.getEnvMap(allocator);
+        var env = try runtime.createEnvMap(allocator);
         defer env.deinit();
         try config.mergeFromEnvMap(&env);
 
@@ -173,7 +174,7 @@ pub fn toProtobufMetric(
                         .double => std.ArrayList(pbmetrics.NumberDataPoint).fromOwnedSlice(try numberDataPoints(allocator, f64, measurements.data.double)),
                         // No support to export histogram data points as gauge.
                         // TODO we should probably return an error?
-                        .histogram, .exponential_histogram => std.ArrayList(pbmetrics.NumberDataPoint){},
+                        .histogram, .exponential_histogram => std.ArrayList(pbmetrics.NumberDataPoint).empty,
                     },
                 },
             },
@@ -182,7 +183,7 @@ pub fn toProtobufMetric(
         },
         // Metadata used for internal translations, we can discard for now.
         // Consumers of SDK should not rely on this field.
-        .metadata = std.ArrayList(pbcommon.KeyValue){},
+        .metadata = std.ArrayList(pbcommon.KeyValue).empty,
     };
 }
 
@@ -202,13 +203,13 @@ fn attributeToProtobuf(allocator: std.mem.Allocator, attribute: Attribute) !pbco
 
 pub fn attributesToProtobufKeyValueList(allocator: std.mem.Allocator, attributes: ?[]Attribute) !pbcommon.KeyValueList {
     if (attributes) |attrs| {
-        var kvs = pbcommon.KeyValueList{ .values = std.ArrayList(pbcommon.KeyValue){} };
+        var kvs = pbcommon.KeyValueList{ .values = std.ArrayList(pbcommon.KeyValue).empty };
         for (attrs) |a| {
             try kvs.values.append(allocator, try attributeToProtobuf(allocator, a));
         }
         return kvs;
     } else {
-        return pbcommon.KeyValueList{ .values = std.ArrayList(pbcommon.KeyValue){} };
+        return pbcommon.KeyValueList{ .values = std.ArrayList(pbcommon.KeyValue).empty };
     }
 }
 
@@ -220,14 +221,14 @@ fn numberDataPoints(allocator: std.mem.Allocator, comptime T: type, data_points:
         numbers[i] = pbmetrics.NumberDataPoint{
             .attributes = attrs.values,
             .start_time_unix_nano = if (dp.timestamps) |ts| ts.start_time_ns orelse 0 else 0,
-            .time_unix_nano = if (dp.timestamps) |ts| ts.time_ns else @intCast(std.time.nanoTimestamp()),
+            .time_unix_nano = if (dp.timestamps) |ts| ts.time_ns else @intCast(runtime.nanoTimestamp()),
             .value = switch (T) {
                 i64 => .{ .as_int = dp.value },
                 f64 => .{ .as_double = dp.value },
                 else => @compileError("Unsupported type conversion to protobuf NumberDataPoint"),
             },
             // TODO: support exemplars.
-            .exemplars = std.ArrayList(pbmetrics.Exemplar){},
+            .exemplars = std.ArrayList(pbmetrics.Exemplar).empty,
         };
     }
 
@@ -245,13 +246,13 @@ fn histogramDataPoints(allocator: std.mem.Allocator, data_points: []DataPoint(Hi
         a.appendAssumeCapacity(pbmetrics.HistogramDataPoint{
             .attributes = attrs.values,
             .start_time_unix_nano = if (dp.timestamps) |ts| ts.start_time_ns orelse 0 else 0,
-            .time_unix_nano = if (dp.timestamps) |ts| ts.time_ns else @intCast(std.time.nanoTimestamp()),
+            .time_unix_nano = if (dp.timestamps) |ts| ts.time_ns else @intCast(runtime.nanoTimestamp()),
             .count = dp.value.count,
             .sum = dp.value.sum,
             .bucket_counts = std.ArrayList(u64).fromOwnedSlice(try allocator.dupe(u64, dp.value.bucket_counts)),
             .explicit_bounds = std.ArrayList(f64).fromOwnedSlice(bounds),
             // TODO support exemplars
-            .exemplars = std.ArrayList(pbmetrics.Exemplar){},
+            .exemplars = std.ArrayList(pbmetrics.Exemplar).empty,
         });
     }
     return a;
@@ -283,7 +284,7 @@ fn exponentialHistogramDataPoints(allocator: std.mem.Allocator, data_points: []D
         a.appendAssumeCapacity(pbmetrics.ExponentialHistogramDataPoint{
             .attributes = attrs.values,
             .start_time_unix_nano = if (dp.timestamps) |ts| ts.start_time_ns orelse 0 else 0,
-            .time_unix_nano = if (dp.timestamps) |ts| ts.time_ns else @intCast(std.time.nanoTimestamp()),
+            .time_unix_nano = if (dp.timestamps) |ts| ts.time_ns else @intCast(runtime.nanoTimestamp()),
             .count = dp.value.count,
             .sum = dp.value.sum,
             .scale = dp.value.scale,
@@ -294,7 +295,7 @@ fn exponentialHistogramDataPoints(allocator: std.mem.Allocator, data_points: []D
             .max = dp.value.max,
             .zero_threshold = 0.0, // Default zero threshold
             // TODO support exemplars
-            .exemplars = std.ArrayList(pbmetrics.Exemplar){},
+            .exemplars = std.ArrayList(pbmetrics.Exemplar).empty,
             .flags = 0,
         });
     }

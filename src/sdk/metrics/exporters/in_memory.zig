@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 
 const MetricExporter = @import("../exporter.zig").MetricExporter;
 const ExporterImpl = @import("../exporter.zig").ExporterImpl;
@@ -19,7 +20,7 @@ pub const InMemoryExporter = struct {
     // Implement the interface via @fieldParentPtr
     exporter: ExporterImpl,
 
-    mx: std.Thread.Mutex = std.Thread.Mutex{},
+    mx: std.Io.Mutex = std.Io.Mutex.init,
 
     pub fn init(allocator: std.mem.Allocator) !*Self {
         const s = try allocator.create(Self);
@@ -33,12 +34,12 @@ pub const InMemoryExporter = struct {
         return s;
     }
     pub fn deinit(self: *Self) void {
-        self.mx.lock();
+        self.mx.lockUncancelable(runtime.io());
         for (self.data.items) |*d| {
             d.*.deinit(self.allocator);
         }
         self.data.deinit(self.allocator);
-        self.mx.unlock();
+        self.mx.unlock(runtime.io());
 
         self.allocator.destroy(self);
     }
@@ -47,8 +48,8 @@ pub const InMemoryExporter = struct {
     fn exportBatch(iface: *ExporterImpl, metrics: []Measurements) MetricReadError!void {
         // Get a pointer to the instance of the struct that implements the interface.
         const self: *Self = @fieldParentPtr("exporter", iface);
-        self.mx.lock();
-        defer self.mx.unlock();
+        self.mx.lockUncancelable(runtime.io());
+        defer self.mx.unlock(runtime.io());
 
         // appendSlice will copy the data into the array list,
         // so we need to free their memory after the exportBatch call.
@@ -60,8 +61,8 @@ pub const InMemoryExporter = struct {
 
     /// Read the metrics from the in memory exporter.
     pub fn fetch(self: *Self, allocator: std.mem.Allocator) ![]Measurements {
-        self.mx.lock();
-        defer self.mx.unlock();
+        self.mx.lockUncancelable(runtime.io());
+        defer self.mx.unlock(runtime.io());
 
         return try self.data.toOwnedSlice(allocator);
     }

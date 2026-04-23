@@ -7,6 +7,7 @@
 //! Currently, only HTTP transport is implemented, because gRPC is not yet supported in Zig's ecosystem.
 
 const std = @import("std");
+const runtime = @import("runtime");
 const http = std.http;
 const Uri = std.Uri;
 const zlib = @cImport({
@@ -247,8 +248,8 @@ pub const ConfigOptions = struct {
     /// Retrieves the configuration from the environment variables.
     /// The environment variables are prefixed with "OTEL_EXPORTER_OTLP_",
     /// and they take precedence over the values set in the config.
-    /// Pass the "environ" argument with std.process.getEnvMap().
-    pub fn mergeFromEnvMap(self: *ConfigOptions, environ: *const std.process.EnvMap) !void {
+    /// Pass the "environ" argument with runtime.createEnvMap().
+    pub fn mergeFromEnvMap(self: *ConfigOptions, environ: *const runtime.EnvMap) !void {
         // customize endpoint and URLs
         // Strings from the EnvMap are borrowed — dupe them so they outlive the EnvMap.
         if (entryFromEnvMap(environ, "ENDPOINT")) |endpoint| {
@@ -288,7 +289,9 @@ pub const ConfigOptions = struct {
             self.scheme = std.meta.stringToEnum(Scheme, lower) orelse return ConfigError.InvalidScheme;
             value = raw[uri.scheme.len + "://".len ..];
         }
-        value = std.mem.trimRight(u8, value, "/");
+        while (value.len > 0 and value[value.len - 1] == '/') {
+            value = value[0 .. value.len - 1];
+        }
         if (value.len == 0) return ConfigError.InvalidEndpoint;
         const owned = try self.allocator.dupe(u8, value);
         if (self.endpoint_owned) self.allocator.free(self.endpoint);
@@ -296,7 +299,7 @@ pub const ConfigOptions = struct {
         self.endpoint_owned = true;
     }
 
-    fn entryFromEnvMap(environ: *const std.process.EnvMap, varSuffix: []const u8) ?[]const u8 {
+    fn entryFromEnvMap(environ: *const runtime.EnvMap, varSuffix: []const u8) ?[]const u8 {
         var env_var_name: [128]u8 = [_]u8{0} ** 128;
         for (env_var_prefix, 0..) |c, i| {
             env_var_name[i] = c;
@@ -316,7 +319,7 @@ pub const ConfigOptions = struct {
             return allocator.dupe(u8, path);
         }
         // When custom URLs are not specified, use the default logic to build the URL.
-        var url = std.ArrayList(u8){};
+        var url = std.ArrayList(u8).empty;
         try url.appendSlice(allocator, @tagName(self.scheme));
         try url.appendSlice(allocator, "://");
         try url.appendSlice(allocator, self.endpoint);
@@ -328,7 +331,7 @@ pub const ConfigOptions = struct {
 
 test "otlp config from env" {
     const allocator = std.testing.allocator;
-    var map = std.process.EnvMap.init(allocator);
+    var map = runtime.EnvMap.init(allocator);
     defer map.deinit();
     // Set the environment variable to test.
     const new_endpoint: []const u8 = "something:1234";
@@ -397,7 +400,7 @@ test "otlp config from env with URL scheme in endpoint" {
     };
 
     for (cases) |c| {
-        var map = std.process.EnvMap.init(allocator);
+        var map = runtime.EnvMap.init(allocator);
         defer map.deinit();
         try map.put("OTEL_EXPORTER_OTLP_ENDPOINT", c.env);
 
@@ -415,7 +418,7 @@ test "otlp config from env with URL scheme in endpoint" {
 
     // Scheme-only input has no host and must be rejected.
     {
-        var map = std.process.EnvMap.init(allocator);
+        var map = runtime.EnvMap.init(allocator);
         defer map.deinit();
         try map.put("OTEL_EXPORTER_OTLP_ENDPOINT", "http://");
 
@@ -437,7 +440,7 @@ test "otlp config custom endpoint for singals" {
     try std.testing.expectEqualStrings("http://localhost:4317/v1/traces", traces);
     // Assert that some signals' HTTP path can be overridden from env.
 
-    var map = std.process.EnvMap.init(allocator);
+    var map = runtime.EnvMap.init(allocator);
     defer map.deinit();
     try map.put("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "https://another.com:1234/traces");
     try map.put("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "http://metrics-new:1234");
@@ -560,7 +563,7 @@ const HTTPClient = struct {
         s.* = Self{
             .allocator = allocator,
             .config = config,
-            .client = http.Client{ .allocator = allocator },
+            .client = http.Client{ .allocator = allocator, .io = runtime.io() },
         };
 
         return s;
@@ -572,7 +575,7 @@ const HTTPClient = struct {
     }
 
     fn extraHeaders(allocator: std.mem.Allocator, config: *ConfigOptions) ![]http.Header {
-        var extra_headers = std.ArrayList(http.Header){};
+        var extra_headers = std.ArrayList(http.Header).empty;
         if (config.headers) |h| {
             const parsed_headers = try parseHeaders(allocator, h);
             defer allocator.free(parsed_headers);
@@ -680,7 +683,7 @@ const HTTPClient = struct {
         while (retry_count < retry_config.max_retries) {
             defer retry_count += 1;
 
-            var client = http.Client{ .allocator = allocator };
+            var client = http.Client{ .allocator = allocator, .io = runtime.io() };
             const response = client.fetch(req_opts) catch |err| {
                 client.deinit();
                 log.err("transport (retry): error connecting to server: {}", .{err});
@@ -693,7 +696,7 @@ const HTTPClient = struct {
                     return;
                 },
                 .too_many_requests, .bad_gateway, .service_unavailable, .gateway_timeout => {
-                    std.Thread.sleep(std.time.ns_per_ms * calculateDelayMillisec(
+                    runtime.sleep(std.time.ns_per_ms * calculateDelayMillisec(
                         retry_config.base_delay_ms,
                         retry_config.max_delay_ms,
                         retry_count,
@@ -734,7 +737,7 @@ fn calculateDelayMillisec(base_delay_ms: u64, max_delay_ms: u64, attempt: u32) u
         max_delay_ms,
         base_delay_ms * std.math.pow(u64, 2, attempt),
     );
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(runtime.timestamp()));
     const jitter = prng.random().intRangeAtMost(u64, 0, @intCast(@divTrunc(delay, 10)));
     return delay + jitter;
 }
@@ -867,7 +870,7 @@ test "otlp HTTPClient send fails for missing server" {
 
     var payload = [_]u8{0} ** 1024;
     const result = client.send(url, &payload);
-    try std.testing.expectError(std.posix.ConnectError.ConnectionRefused, result);
+    try std.testing.expectError(error.ConnectionRefused, result);
 }
 
 /// Export the data to the OTLP endpoint using the options configured with ConfigOptions.
@@ -908,7 +911,7 @@ pub fn Export(
 pub fn ExportFile(
     allocator: std.mem.Allocator,
     otlp_payload: Signal.Data,
-    file: *std.fs.File,
+    file: *std.Io.File,
 ) !void {
     // We always want the JSON format for file export.
     // Single-line output for each entry is concatenated with newline before flushing.
@@ -918,14 +921,12 @@ pub fn ExportFile(
     };
     defer allocator.free(payload);
 
-    // Position the file cursor at the end before writing
-    try file.seekFromEnd(0);
+    const stat = try file.stat(runtime.io());
+    const offset = stat.size;
 
-    // Write payload and newline directly to file
-    try file.writeAll(payload);
-    try file.writeAll("\n");
-
-    try file.sync();
+    try file.writePositionalAll(runtime.io(), payload, offset);
+    try file.writePositionalAll(runtime.io(), "\n", offset + payload.len);
+    try file.sync(runtime.io());
 }
 
 // NOTE: The following code **not used** in the current implementation, but it is here to show how it could be done.
@@ -945,27 +946,27 @@ fn ExpBackoffQueue(comptime Retry: type) type {
 
         allocator: std.mem.Allocator,
         queue: std.PriorityQueue(DelayedRetry, void, compareRetriable),
-        mutex: std.Thread.Mutex,
-        condition: *std.Thread.Condition,
+        mutex: std.Io.Mutex,
+        signal: *std.Io.Event,
         config: ExpBackoffconfig,
 
-        fn init(allocator: std.mem.Allocator, config: ExpBackoffconfig, signal: *std.Thread.Condition) !*Self {
+        fn init(allocator: std.mem.Allocator, config: ExpBackoffconfig, signal: *std.Io.Event) !*Self {
             const s = try allocator.create(Self);
             s.* = Self{
                 .allocator = allocator,
-                .queue = std.PriorityQueue(DelayedRetry, void, compareRetriable).init(allocator, {}),
-                .mutex = std.Thread.Mutex{},
-                .condition = signal,
+                .queue = std.PriorityQueue(DelayedRetry, void, compareRetriable).initContext({}),
+                .mutex = std.Io.Mutex.init,
+                .signal = signal,
                 .config = config,
             };
             return s;
         }
 
         pub fn deinit(self: *Self) void {
-            self.mutex.lock();
-            while (self.queue.removeOrNull()) |_| {}
-            self.queue.deinit();
-            self.mutex.unlock();
+            self.mutex.lockUncancelable(runtime.io());
+            while (self.queue.pop()) |_| {}
+            self.queue.deinit(self.allocator);
+            self.mutex.unlock(runtime.io());
 
             self.allocator.destroy(self);
         }
@@ -975,7 +976,7 @@ fn ExpBackoffQueue(comptime Retry: type) type {
         }
 
         fn enqueue(self: *Self, value: Retry, attempt: u32) !void {
-            const next_attempt_ms = @as(u64, @intCast(std.time.milliTimestamp())) +
+            const next_attempt_ms = @as(u64, @intCast(runtime.milliTimestamp())) +
                 calculateDelayMillisec(self.config.base_delay_ms, self.config.max_delay_ms, attempt);
 
             const req = DelayedRetry{
@@ -984,27 +985,18 @@ fn ExpBackoffQueue(comptime Retry: type) type {
                 .next_attempt_time_ms = next_attempt_ms,
             };
 
-            self.mutex.lock();
-            try self.queue.add(req);
-            self.mutex.unlock();
+            self.mutex.lockUncancelable(runtime.io());
+            try self.queue.push(self.allocator, req);
+            self.mutex.unlock(runtime.io());
 
-            self.condition.signal();
+            self.signal.set(runtime.io());
         }
 
         fn poll(self: *Self) ?Retry {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(runtime.io());
+            defer self.mutex.unlock(runtime.io());
 
-            if (self.queue.removeOrNull()) |item| {
-                const now_ms = std.time.milliTimestamp();
-                if (item.next_attempt_time_ms < now_ms) {
-                    self.condition.timedWait(
-                        &self.mutex,
-                        (@as(u64, @intCast(now_ms)) - item.next_attempt_time_ms) * std.time.ns_per_ms,
-                    ) catch {
-                        return item.value;
-                    };
-                }
+            if (self.queue.pop()) |item| {
                 return item.value;
             }
             return null;
@@ -1013,7 +1005,7 @@ fn ExpBackoffQueue(comptime Retry: type) type {
 }
 
 test "otlp ExpBackOffqueue for request FetchOptions" {
-    var cond = std.Thread.Condition{};
+    var signal: std.Io.Event = .unset;
 
     const cfg = ExpBackoffconfig{
         .max_retries = 10,
@@ -1022,7 +1014,7 @@ test "otlp ExpBackOffqueue for request FetchOptions" {
     };
     const queue = ExpBackoffQueue(*http.Client.FetchOptions);
 
-    const q = try queue.init(std.testing.allocator, cfg, &cond);
+    const q = try queue.init(std.testing.allocator, cfg, &signal);
     defer q.deinit();
 
     var req = http.Client.FetchOptions{

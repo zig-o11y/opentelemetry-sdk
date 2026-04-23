@@ -15,7 +15,7 @@
     // This field is optional.
     // This is currently advisory only; Zig does not yet do anything
     // with this value.
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
 
     // This field is optional.
     // Each dependency must either provide a `url` and `hash`, or a `path`.
@@ -28,18 +28,13 @@
             .hash = "zbench-0.11.2-YTdc7zolAQDlBF9i0ywXIvDjafL3Kg27S-aFUq6dU5zy",
         },
         .opentelemetry_proto = .{
-            .url = "git+https://github.com/zig-o11y/opentelemetry-proto?ref=v1.10.2#bf2cc41c1c0e9d5fd8849fcd3cb7788be3da90d5",
-            .hash = "opentelemetry_proto-1.10.0-S4Y0uxzcAgBM04e5dhBjFRj90MQwOPFY3FltfUwoQs1z",
-        },
-        // TODO: remove when 0.16.0 is released
-        .zlib = .{
-            .url = "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
-            .hash = "1220fed0c74e1019b3ee29edae2051788b080cd96e90d56836eea857b0b966742efb",
+            .path = "deps/opentelemetry-proto",
         },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "deps",
         "src",
         "examples",
         "benchmarks",

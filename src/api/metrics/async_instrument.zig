@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 const Kind = @import("instrument.zig").Kind;
 const MeasurementsData = @import("measurement.zig").MeasurementsData;
 const DataPoint = @import("measurement.zig").DataPoint;
@@ -87,7 +88,7 @@ pub fn ObservableInstrument(K: Kind) type {
                 const Self = @This();
 
                 allocator: std.mem.Allocator,
-                lock: std.Thread.Mutex = .{},
+                lock: std.Io.Mutex = .init,
                 /// List of functions that will produce data points when called.
                 /// Functions are called by the Meter when it observes the instrument (e.g. when Metricreader collects metrics).
                 callbacks: ?[]ObserveMeasures = null,
@@ -110,8 +111,8 @@ pub fn ObservableInstrument(K: Kind) type {
                 /// All callbacks are expected to return a MeasurementsData with consistent type.
                 /// If different callbacks return different types, an error is returned when observing them.
                 pub fn registerCallback(self: *Self, callback: ObserveMeasures) !void {
-                    self.lock.lock();
-                    defer self.lock.unlock();
+                    self.lock.lockUncancelable(runtime.io());
+                    defer self.lock.unlock(runtime.io());
 
                     if (self.callbacks) |c| {
                         var new_callbacks = try self.allocator.alloc(ObserveMeasures, c.len + 1);
@@ -126,8 +127,8 @@ pub fn ObservableInstrument(K: Kind) type {
                 }
 
                 fn observe(self: *Self, allocator: std.mem.Allocator) MetricObserveError!?MeasurementsData {
-                    self.lock.lock();
-                    defer self.lock.unlock();
+                    self.lock.lockUncancelable(runtime.io());
+                    defer self.lock.unlock(runtime.io());
 
                     if (self.callbacks) |c| {
                         var m = try allocator.alloc(MeasurementsData, c.len);

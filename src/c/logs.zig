@@ -330,7 +330,7 @@ const StdoutLogExporterWrapper = struct {
 
     fn init(self: *StdoutLogExporterWrapper) void {
         // Initialize the exporter with stdout
-        self.exporter = StdoutExporter.init(std.fs.File.stdout().deprecatedWriter());
+        self.exporter = StdoutExporter.init(std.Io.File.stdout().deprecatedWriter());
         // Now create the log record exporter interface
         self.log_record_exporter = self.exporter.?.asLogRecordExporter();
     }

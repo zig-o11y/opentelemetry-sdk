@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 
 const log = std.log.scoped(.instrument);
 
@@ -245,7 +246,7 @@ pub fn Counter(comptime T: type) type {
     return struct {
         const Self = @This();
         allocator: std.mem.Allocator,
-        lock: std.Thread.Mutex,
+        lock: std.Io.Mutex,
 
         /// Record data points for the counter.
         /// The list of measurements will be used when reading the data during a collection cycle.
@@ -256,7 +257,7 @@ pub fn Counter(comptime T: type) type {
             return Self{
                 .data_points = .empty,
                 .allocator = allocator,
-                .lock = std.Thread.Mutex{},
+                .lock = std.Io.Mutex.init,
             };
         }
 
@@ -269,8 +270,8 @@ pub fn Counter(comptime T: type) type {
 
         /// Add the given delta to the counter, using the provided attributes.
         pub fn add(self: *Self, delta: T, attributes: anytype) !void {
-            self.lock.lock();
-            defer self.lock.unlock();
+            self.lock.lockUncancelable(runtime.io());
+            defer self.lock.unlock(runtime.io());
 
             const dp = try DataPoint(T).new(self.allocator, delta, attributes);
             try self.data_points.append(self.allocator, dp);
@@ -279,8 +280,8 @@ pub fn Counter(comptime T: type) type {
         /// Add the given delta to the counter with a pre-built attribute slice.
         /// This is primarily used for C interop where attributes are passed as a slice.
         pub fn addWithSlice(self: *Self, delta: T, attributes: ?[]Attribute) !void {
-            self.lock.lock();
-            defer self.lock.unlock();
+            self.lock.lockUncancelable(runtime.io());
+            defer self.lock.unlock(runtime.io());
 
             const dp = DataPoint(T){
                 .value = delta,
@@ -293,8 +294,8 @@ pub fn Counter(comptime T: type) type {
         }
 
         fn measurementsData(self: *Self, allocator: std.mem.Allocator) !MeasurementsData {
-            self.lock.lock();
-            defer self.lock.unlock();
+            self.lock.lockUncancelable(runtime.io());
+            defer self.lock.unlock(runtime.io());
             // We have to clear up the data points after we return a copy of them.
             // this resets the state of the instrument, allowing to record more datapoints
             // until the next collection cycle.
@@ -328,7 +329,7 @@ pub fn Histogram(comptime T: type) type {
         const Self = @This();
 
         allocator: std.mem.Allocator,
-        lock: std.Thread.Mutex,
+        lock: std.Io.Mutex,
 
         /// Keeps track of the raw recorded values for each set of attributes.
         /// The measurements are cleared after each collection cycle.
@@ -337,7 +338,7 @@ pub fn Histogram(comptime T: type) type {
         fn init(allocator: std.mem.Allocator) Self {
             return Self{
                 .allocator = allocator,
-                .lock = std.Thread.Mutex{},
+                .lock = std.Io.Mutex.init,
                 .data_points = .empty,
             };
         }
@@ -352,8 +353,8 @@ pub fn Histogram(comptime T: type) type {
 
         /// Add the given value to the histogram, using the provided attributes.
         pub fn record(self: *Self, value: T, attributes: anytype) !void {
-            self.lock.lock();
-            defer self.lock.unlock();
+            self.lock.lockUncancelable(runtime.io());
+            defer self.lock.unlock(runtime.io());
 
             const dp = try DataPoint(T).new(self.allocator, value, attributes);
             try self.data_points.append(self.allocator, dp);
@@ -362,8 +363,8 @@ pub fn Histogram(comptime T: type) type {
         /// Record a value with a pre-built attribute slice.
         /// This is primarily used for C interop where attributes are passed as a slice.
         pub fn recordWithSlice(self: *Self, value: T, attributes: ?[]Attribute) !void {
-            self.lock.lock();
-            defer self.lock.unlock();
+            self.lock.lockUncancelable(runtime.io());
+            defer self.lock.unlock(runtime.io());
 
             const dp = DataPoint(T){
                 .value = value,
@@ -376,8 +377,8 @@ pub fn Histogram(comptime T: type) type {
         }
 
         fn measurementsData(self: *Self, allocator: std.mem.Allocator) !MeasurementsData {
-            self.lock.lock();
-            defer self.lock.unlock();
+            self.lock.lockUncancelable(runtime.io());
+            defer self.lock.unlock(runtime.io());
 
             // We have to clear up the data points after we return a copy of them.
             // This resets the collected measurements, allowing to record more datapoints
@@ -424,7 +425,7 @@ pub fn Gauge(comptime T: type) type {
         const Self = @This();
 
         allocator: std.mem.Allocator,
-        lock: std.Thread.Mutex,
+        lock: std.Io.Mutex,
 
         data_points: std.ArrayListUnmanaged(DataPoint(T)),
 
@@ -432,7 +433,7 @@ pub fn Gauge(comptime T: type) type {
             return Self{
                 .allocator = allocator,
                 .data_points = .empty,
-                .lock = std.Thread.Mutex{},
+                .lock = std.Io.Mutex.init,
             };
         }
 
@@ -445,8 +446,8 @@ pub fn Gauge(comptime T: type) type {
 
         /// Record the given value to the gauge, using the provided attributes.
         pub fn record(self: *Self, value: T, attributes: anytype) !void {
-            self.lock.lock();
-            defer self.lock.unlock();
+            self.lock.lockUncancelable(runtime.io());
+            defer self.lock.unlock(runtime.io());
 
             const dp = try DataPoint(T).new(self.allocator, value, attributes);
             try self.data_points.append(self.allocator, dp);
@@ -455,8 +456,8 @@ pub fn Gauge(comptime T: type) type {
         /// Record a value with a pre-built attribute slice.
         /// This is primarily used for C interop where attributes are passed as a slice.
         pub fn recordWithSlice(self: *Self, value: T, attributes: ?[]Attribute) !void {
-            self.lock.lock();
-            defer self.lock.unlock();
+            self.lock.lockUncancelable(runtime.io());
+            defer self.lock.unlock(runtime.io());
 
             const dp = DataPoint(T){
                 .value = value,
@@ -469,8 +470,8 @@ pub fn Gauge(comptime T: type) type {
         }
 
         fn measurementsData(self: *Self, allocator: std.mem.Allocator) !MeasurementsData {
-            self.lock.lock();
-            defer self.lock.unlock();
+            self.lock.lockUncancelable(runtime.io());
+            defer self.lock.unlock(runtime.io());
 
             defer {
                 for (self.data_points.items) |*dp| {
@@ -809,9 +810,9 @@ fn testCounterAddingOne(counter: *Counter(u64)) !void {
 fn testCounterCollect(counter: *Counter(u64)) !void {
     // FIXME flaky test can result in failure, so we added a sleep but we should find a more robust solution.
     for (0..1000) |_| {
-        counter.lock.lock();
-        counter.lock.unlock();
-        std.Thread.sleep(25);
+        counter.lock.lockUncancelable(runtime.io());
+        counter.lock.unlock(runtime.io());
+        runtime.sleep(25);
     }
 
     const fetched = try counter.measurementsData(std.testing.allocator);
@@ -855,9 +856,9 @@ fn testHistogramRecordOne(histogram: *Histogram(u64)) !void {
 fn testHistogramCollect(histogram: *Histogram(u64)) !void {
     // FIXME flaky test can result in failure, so we added a sleep but we should find a more robust solution.
     for (0..1000) |_| {
-        histogram.lock.lock();
-        histogram.lock.unlock();
-        std.Thread.sleep(25);
+        histogram.lock.lockUncancelable(runtime.io());
+        histogram.lock.unlock(runtime.io());
+        runtime.sleep(25);
     }
 
     const fetched = try histogram.measurementsData(std.testing.allocator);

@@ -14,6 +14,7 @@
 //! defer _ = context.detachContext(token) catch {};
 //! ```
 const std = @import("std");
+const runtime = @import("runtime");
 
 const attributes = @import("../../attributes.zig");
 const AttributeValue = attributes.AttributeValue;
@@ -228,7 +229,7 @@ const ContextStack = struct {
 
     /// Initializes a new context stack.
     fn init(allocator: std.mem.Allocator) Self {
-        return Self{ .contexts = std.ArrayList(Context){}, .allocator = allocator };
+        return Self{ .contexts = std.ArrayList(Context).empty, .allocator = allocator };
     }
 
     /// Releases all resources and contexts in the stack.
@@ -491,19 +492,19 @@ test "runtime key creation thread safety" {
     // Shared state for collecting results
     const SharedData = struct {
         keys: std.ArrayList(ContextKey),
-        mutex: std.Thread.Mutex = .{},
-        barrier: std.Thread.ResetEvent = .{},
+        mutex: std.Io.Mutex = .init,
+        barrier: std.Io.Event = .unset,
     };
 
     var shared = SharedData{
-        .keys = std.ArrayList(ContextKey){},
+        .keys = std.ArrayList(ContextKey).empty,
     };
     defer shared.keys.deinit(std.testing.allocator);
 
     const keyGenWorker = struct {
         fn run(data: *SharedData, thread_id: u32) void {
             // Wait for all threads to start
-            data.barrier.wait();
+            data.barrier.waitUncancelable(runtime.io());
 
             // Generate keys rapidly to stress test atomicity
             var local_keys: [keys_per_thread]ContextKey = undefined;
@@ -518,8 +519,8 @@ test "runtime key creation thread safety" {
             }
 
             // Add to shared collection
-            data.mutex.lock();
-            defer data.mutex.unlock();
+            data.mutex.lockUncancelable(runtime.io());
+            defer data.mutex.unlock(runtime.io());
             data.keys.appendSlice(std.testing.allocator, &local_keys) catch unreachable;
         }
     }.run;
@@ -535,7 +536,7 @@ test "runtime key creation thread safety" {
     }
 
     // Start all threads simultaneously
-    shared.barrier.set();
+    shared.barrier.set(runtime.io());
 
     // Wait for completion
     for (threads) |thread| {

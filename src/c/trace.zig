@@ -34,6 +34,7 @@
 //! ```
 
 const std = @import("std");
+const runtime = @import("runtime");
 const TracerProvider = @import("../sdk/trace/provider.zig").TracerProvider;
 const Tracer = @import("../sdk/trace/provider.zig").Tracer;
 const TracerImpl = @import("../api/trace/tracer.zig").TracerImpl;
@@ -237,7 +238,7 @@ pub fn tracerProviderCreate() callconv(.c) ?*OtelTracerProvider {
 
     // Allocate the PRNG on the heap so it persists
     const prng_ptr = allocator.create(std.Random.DefaultPrng) catch return null;
-    prng_ptr.* = std.Random.DefaultPrng.init(@intCast(std.time.nanoTimestamp()));
+    prng_ptr.* = std.Random.DefaultPrng.init(@intCast(runtime.nanoTimestamp()));
 
     // Create a random ID generator with the heap-allocated PRNG
     const random_generator = RandomIDGenerator.init(prng_ptr.random());
@@ -637,7 +638,7 @@ pub fn spanExporterStdoutCreate() callconv(.c) ?*OtelSpanExporter {
 
     // Allocate the exporter on the heap
     const exporter_ptr = allocator.create(DeprecatedStdoutExporter) catch return null;
-    exporter_ptr.* = DeprecatedStdoutExporter.init(std.fs.File.stdout().deprecatedWriter());
+    exporter_ptr.* = DeprecatedStdoutExporter.init(std.Io.File.stdout().deprecatedWriter());
 
     // Allocate the SpanExporter interface on the heap
     const span_exporter_ptr = allocator.create(SpanExporter) catch {

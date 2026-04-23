@@ -1,4 +1,5 @@
 const std = @import("std");
+const runtime = @import("runtime");
 
 const log = std.log.scoped(.stdout_exporter);
 
@@ -21,7 +22,7 @@ pub const StdoutExporter = struct {
     allocator: std.mem.Allocator,
     exporter: ExporterImpl,
 
-    file: std.fs.File = std.fs.File.stdout(),
+    file: std.Io.File = std.Io.File.stdout(),
 
     pub fn init(allocator: std.mem.Allocator) !*Self {
         const s = try allocator.create(Self);
@@ -40,7 +41,7 @@ pub const StdoutExporter = struct {
 
     // Helper test function to set the output file
     // since zig build does not allow writing to stdout.
-    pub fn withOutputFile(self: *Self, file: std.fs.File) void {
+    pub fn withOutputFile(self: *Self, file: std.Io.File) void {
         self.file = file;
     }
 
@@ -63,7 +64,7 @@ pub const StdoutExporter = struct {
             defer self.allocator.free(fmt);
 
             // Use writeAll to directly write to file without buffering
-            self.file.writeAll(fmt) catch |err| {
+            self.file.writeStreamingAll(runtime.io(), fmt) catch |err| {
                 log.err("Failed to write to file: {}", .{err});
                 return MetricReadError.ExportFailed;
             };
@@ -106,13 +107,13 @@ test "exporters/stdout" {
     // Create a temporary file to check the output
     const filename = "stdout_exporter_test.txt";
     // Delete file if it exists first
-    std.fs.cwd().deleteFile(filename) catch {};
-    const file = try std.fs.cwd().createFile(filename, .{
+    runtime.fs.cwdDeleteFile(filename) catch {};
+    const file = try runtime.fs.cwdCreateFile(filename, .{
         .truncate = true,
         .read = true,
         .exclusive = true,
     });
-    defer std.fs.cwd().deleteFile(filename) catch unreachable;
+    defer runtime.fs.cwdDeleteFile(filename) catch unreachable;
 
     var stdoutExporter = try StdoutExporter.init(allocator);
     defer stdoutExporter.deinit();
@@ -125,12 +126,12 @@ test "exporters/stdout" {
     try std.testing.expect(result == .Success);
 
     // Close the file to read the content
-    file.close();
+    file.close(runtime.io());
 
     const buf = try std.testing.allocator.alloc(u8, 1024);
     defer std.testing.allocator.free(buf);
 
-    const read = try std.fs.cwd().readFile(filename, buf);
+    const read = try runtime.fs.cwdReadFile(filename, buf);
 
     // Check that we actually wrote something to the file
     try std.testing.expect(read.len > 0);
