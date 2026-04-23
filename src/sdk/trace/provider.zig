@@ -285,6 +285,7 @@ pub const Tracer = struct {
         // Determine parent context and trace ID
         var parent_span_context: ?trace_api.SpanContext = null;
         var trace_id: trace_api.TraceID = undefined;
+        var span_id: trace_api.SpanID = undefined;
 
         if (options.parent_context) |parent_ctx| {
             parent_span_context = trace_api.extractSpanContext(parent_ctx);
@@ -293,14 +294,12 @@ pub const Tracer = struct {
         // Determine trace ID based on parent
         if (parent_span_context) |parent_sc| {
             trace_id = parent_sc.trace_id;
+            span_id = self.provider.id_generator.newSpanID(trace_id);
         } else {
-            // Generate new trace ID for root span using SDK ID generator
             const ids = self.provider.id_generator.newIDs();
             trace_id = ids.trace_id;
+            span_id = ids.span_id;
         }
-
-        // Generate span ID using SDK ID generator
-        const ids = self.provider.id_generator.newIDs();
 
         // Create trace state - inherit from parent if available
         var trace_state: trace_api.TraceState = undefined;
@@ -313,7 +312,7 @@ pub const Tracer = struct {
         // Create span context
         const span_context = trace_api.SpanContext.init(
             trace_id,
-            ids.span_id,
+            span_id,
             trace_api.TraceFlags.default(),
             trace_state,
             false,
