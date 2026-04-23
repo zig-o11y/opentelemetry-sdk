@@ -143,7 +143,15 @@ pub fn readJsonFile(allocator: std.mem.Allocator, dir: std.Io.Dir, file_name: []
     const content = try allocator.alloc(u8, stat.size);
     errdefer allocator.free(content);
     const read_len = try file.readPositionalAll(runtime.io(), content, 0);
-    return content[0..read_len];
+
+    // Short reads are possible (e.g. file shrank between stat and read).
+    // Zig allocators require the freed slice to match the allocated length,
+    // so shrink the allocation to the actual bytes read before returning.
+    if (read_len != stat.size) {
+        const shrunk = try allocator.realloc(content, read_len);
+        return shrunk;
+    }
+    return content;
 }
 
 pub fn waitForFile(dir: std.Io.Dir, file_name: []const u8, max_retries: usize) !void {

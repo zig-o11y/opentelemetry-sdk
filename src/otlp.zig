@@ -696,6 +696,9 @@ const HTTPClient = struct {
                     return;
                 },
                 .too_many_requests, .bad_gateway, .service_unavailable, .gateway_timeout => {
+                    // This retry runs in a dedicated OS thread (see retryRequest spawn above).
+                    // For Io.Evented users, the spawned thread still blocks the OS thread,
+                    // which is less efficient than an evented delay but correct.
                     runtime.sleep(std.time.ns_per_ms * calculateDelayMillisec(
                         retry_config.base_delay_ms,
                         retry_config.max_delay_ms,
@@ -921,12 +924,11 @@ pub fn ExportFile(
     };
     defer allocator.free(payload);
 
-    // Lock the file to prevent TOCTOU between stat and write.
-    // This serializes both intra-process threads and inter-process writers
-    // that respect advisory locks.
-    try file.lock(runtime.io(), .exclusive);
-    defer file.unlock(runtime.io());
-
+    // The caller is expected to hold an open-time advisory lock (e.g. via
+    // std.Io.Dir.CreateFileOptions{ .lock = .exclusive }) when concurrent
+    // access is possible.  We do NOT lock here because POSIX flock is not
+    // ref-counted: an unlock in this function would permanently release the
+    // fd-level lock that the caller intended to hold for the file's lifetime.
     const stat = try file.stat(runtime.io());
     const offset = stat.size;
 

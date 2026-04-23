@@ -9,19 +9,30 @@ const InitState = enum(u8) {
 var init_state = std.atomic.Value(InitState).init(.uninitialized);
 var threaded_runtime: std.Io.Threaded = undefined;
 var threaded_io: std.Io = undefined;
+var owns_runtime = std.atomic.Value(bool).init(false);
 
+/// Global runtime abstraction for the OpenTelemetry SDK.
+///
+/// For Zig 0.16, we use a lazy-initialized global std.Io.Threaded because
+/// std.Io is the first-class I/O abstraction. Users who need a custom Io
+/// (e.g. for testing or evented mode) can call setIo() before any SDK usage.
+///
+/// Lifecycle: the global runtime lives for the process lifetime. There is no
+/// reference counting because the OTel spec encourages multiple independent
+/// providers but does not require global runtime teardown. Each provider's
+/// processors manage their own background threads. See runtime.deinit() docs.
 /// Override the default Io instance. Must be called before any SDK usage.
 /// If not called, the SDK lazily initializes a global std.Io.Threaded.
+///
+/// This is a one-time setter: once the runtime has transitioned out of
+/// .uninitialized (either via this function or lazy init in io()), the
+/// global Io is fixed.  Callers who need a custom Io must set it before
+/// any SDK component calls runtime.io().
 pub fn setIo(new_io: std.Io) void {
     while (true) {
         switch (init_state.load(.acquire)) {
-            .ready => {
-                // Already initialized with the default runtime; swap in caller's Io.
-                // We intentionally do not deinit the threaded_runtime here
-                // because it may already be in use.
-                threaded_io = new_io;
-                return;
-            },
+            .ready => @panic("setIo() called after runtime was already initialized. " ++
+                "It must be called before any SDK usage."),
             .uninitialized => {
                 if (init_state.cmpxchgStrong(.uninitialized, .initializing, .acq_rel, .acquire) == null) {
                     threaded_io = new_io;
@@ -55,6 +66,7 @@ fn ensureInitialized() void {
                 if (init_state.cmpxchgStrong(.uninitialized, .initializing, .acq_rel, .acquire) == null) {
                     threaded_runtime = std.Io.Threaded.init(std.heap.page_allocator, .{});
                     threaded_io = threaded_runtime.io();
+                    owns_runtime.store(true, .release);
                     init_state.store(.ready, .release);
                     return;
                 }
@@ -69,11 +81,21 @@ pub fn io() std.Io {
     return threaded_io;
 }
 
+/// Tear down the global threaded runtime.
+///
+/// WARNING: This should only be called when ALL OpenTelemetry providers,
+/// processors, and exporters have been shut down and no background threads
+/// are using the runtime. Calling deinit() while any SDK component is still
+/// active will cause crashes or hangs.
+///
+/// The global runtime is intended
+/// to live for the process lifetime. Explicit deinit() is provided mainly
+/// for test environments that need strict leak detection.
 pub fn deinit() void {
     switch (init_state.swap(.uninitialized, .acq_rel)) {
         .uninitialized => {},
         .initializing => unreachable,
-        .ready => threaded_runtime.deinit(),
+        .ready => if (owns_runtime.swap(false, .acq_rel)) threaded_runtime.deinit(),
     }
 }
 
@@ -83,16 +105,25 @@ fn realtimeTimespec() std.c.timespec {
     return ts;
 }
 
+/// Wall-clock timestamp in seconds since UNIX epoch.
+/// Uses CLOCK_REALTIME. Suitable for absolute span timestamps per OTel spec.
+/// NOTE: Subject to NTP adjustments and wall-clock jumps.
 pub fn timestamp() i64 {
     const ts = realtimeTimespec();
     return @intCast(ts.sec);
 }
 
+/// Wall-clock timestamp in milliseconds since UNIX epoch.
+/// Uses CLOCK_REALTIME. Suitable for absolute span timestamps per OTel spec.
+/// NOTE: Subject to NTP adjustments and wall-clock jumps.
 pub fn milliTimestamp() i64 {
     const ts = realtimeTimespec();
     return @as(i64, ts.sec) * std.time.ms_per_s + @divTrunc(@as(i64, ts.nsec), std.time.ns_per_ms);
 }
 
+/// Wall-clock timestamp in nanoseconds since UNIX epoch.
+/// Uses CLOCK_REALTIME. Suitable for absolute span start/end times per OTel spec.
+/// NOTE: Subject to NTP adjustments and wall-clock jumps.
 pub fn nanoTimestamp() i128 {
     const ts = realtimeTimespec();
     return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);

@@ -49,6 +49,9 @@ pub const MetricExporter = struct {
     // Lock helper to signal shutdown and/or export is in progress
     hasShutDown: bool = false,
     exportCompleted: std.Io.Mutex = std.Io.Mutex.init,
+    /// Event signaled when an export operation completes. Used by forceFlush
+    /// to avoid busy-waiting.
+    exportCompletedEvent: std.Io.Event = .unset,
 
     /// Creates a new MetricExporter, providing an allocator and an exporter implementation.
     /// Use this function to plug a custom exporter implementation.
@@ -149,7 +152,11 @@ pub const MetricExporter = struct {
         // Acquire the lock to signal to forceFlush to wait for export to complete.
         // Also, guarantee that only one export operation is in progress at any time.
         self.exportCompleted.lockUncancelable(runtime.io());
-        defer self.exportCompleted.unlock(runtime.io());
+        defer {
+            self.exportCompleted.unlock(runtime.io());
+            // Signal any waiting forceFlush callers that export is done.
+            self.exportCompletedEvent.set(runtime.io());
+        }
 
         // Little trick to timeout the export operation if needed.
         if (timeout_ms) |timeout| {
@@ -217,17 +224,30 @@ pub const MetricExporter = struct {
 
     // Ensure that all the data is flushed to the destination.
     pub fn forceFlush(self: *Self, timeout_ms: u64) !void {
-        const start = runtime.milliTimestamp(); // Milliseconds
-        const timeout: i64 = @intCast(timeout_ms);
-        while (runtime.milliTimestamp() < start + timeout) {
-            if (self.exportCompleted.tryLock()) {
-                self.exportCompleted.unlock(runtime.io());
-                return;
-            } else {
-                runtime.sleep(std.time.ns_per_ms);
-            }
+        // Fast path: no export in progress
+        if (self.exportCompleted.tryLock()) {
+            self.exportCompleted.unlock(runtime.io());
+            return;
         }
-        return MetricReadError.ForceFlushTimedOut;
+
+        // Slow path: an export is in progress. Reset the event so we
+        // only wait for the current export (not a previous one).
+        self.exportCompletedEvent.reset();
+
+        // Try again after resetting — the export may have completed
+        // between our first tryLock and the reset.
+        if (self.exportCompleted.tryLock()) {
+            self.exportCompleted.unlock(runtime.io());
+            return;
+        }
+
+        // Wait for the in-progress export to signal completion.
+        _ = self.exportCompletedEvent.waitTimeout(
+            runtime.io(),
+            runtime.timeoutAfterMs(timeout_ms),
+        ) catch {
+            return MetricReadError.ForceFlushTimedOut;
+        };
     }
 
     pub fn shutdown(self: *Self) void {
@@ -357,9 +377,14 @@ test "metric exporter force flush fails" {
         backgroundRunner,
         .{ me, &metrics },
     );
-    bg.join();
+    defer bg.join();
 
-    const e = me.forceFlush(0);
+    // Give the background thread time to acquire the export lock.
+    runtime.sleep(50 * std.time.ns_per_ms);
+
+    // Call forceFlush while the slow export is still in progress.
+    // With a 10 ms timeout it should time out well before the 1 s export finishes.
+    const e = me.forceFlush(10);
     try std.testing.expectError(MetricReadError.ForceFlushTimedOut, e);
 }
 
