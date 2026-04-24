@@ -179,28 +179,3 @@ pub fn createEnvMap(allocator: std.mem.Allocator) !EnvMap {
     return std.process.Environ.createMap(.{ .block = currentEnvironBlock() }, allocator);
 }
 
-pub const fs = struct {
-    pub fn cwdCreateDirPath(path: []const u8) !void {
-        return std.Io.Dir.cwd().createDirPath(io(), path);
-    }
-
-    pub fn cwdCreateFile(path: []const u8, options: std.Io.Dir.CreateFileOptions) !std.Io.File {
-        return std.Io.Dir.cwd().createFile(io(), path, options);
-    }
-
-    pub fn cwdDeleteFile(path: []const u8) !void {
-        return std.Io.Dir.cwd().deleteFile(io(), path);
-    }
-
-    pub fn cwdDeleteTree(path: []const u8) !void {
-        return std.Io.Dir.cwd().deleteTree(io(), path);
-    }
-
-    pub fn cwdOpenFile(path: []const u8, options: std.Io.Dir.OpenFileOptions) !std.Io.File {
-        return std.Io.Dir.cwd().openFile(io(), path, options);
-    }
-
-    pub fn cwdReadFile(path: []const u8, buffer: []u8) ![]u8 {
-        return std.Io.Dir.cwd().readFile(io(), path, buffer);
-    }
-};

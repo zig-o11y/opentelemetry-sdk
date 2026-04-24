@@ -122,9 +122,9 @@ pub const SimpleProcessor = struct {
     }
 
     fn onEnd(ctx: *anyopaque, span: trace.Span) void {
-        // Only process recording spans
-        if (!span.is_recording) return;
-
+        // `span.end()` has already flipped `is_recording` to false before
+        // the tracer calls onEnd, so we do not gate on it here — every
+        // ended SDK span is eligible for export.
         const self: *Self = @ptrCast(@alignCast(ctx));
 
         self.mutex.lockUncancelable(self.io);
@@ -236,9 +236,9 @@ pub const BatchingProcessor = struct {
     }
 
     fn onEnd(ctx: *anyopaque, span: trace.Span) void {
-        // Only process recording spans
-        if (!span.is_recording) return;
-
+        // `span.end()` has already flipped `is_recording` to false before
+        // the tracer calls onEnd, so we do not gate on it here — every
+        // ended SDK span is eligible for batching.
         const self: *Self = @ptrCast(@alignCast(ctx));
 
         self.mutex.lockUncancelable(self.io);

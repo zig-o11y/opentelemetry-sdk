@@ -4,7 +4,6 @@
 //! to a file in JSON Lines format.
 
 const std = @import("std");
-const runtime = @import("runtime");
 
 const log = std.log.scoped(.file_exporter);
 
@@ -27,6 +26,7 @@ pub const FileExporter = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
+    io: std.Io,
     resource: Resource,
     file: std.Io.File,
     owns_file: bool,
@@ -38,17 +38,18 @@ pub const FileExporter = struct {
         append: bool = true,
     };
 
-    pub fn init(allocator: std.mem.Allocator, resource: Resource, options: Options) !Self {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, resource: Resource, options: Options) !Self {
         const file = if (options.file_path) |path| blk: {
             const flags: std.Io.Dir.CreateFileOptions = if (options.append)
                 .{ .read = true, .truncate = false, .lock = .exclusive }
             else
                 .{ .read = true, .truncate = true };
-            break :blk try runtime.fs.cwdCreateFile(path, flags);
+            break :blk try std.Io.Dir.cwd().createFile(io, path, flags);
         } else std.Io.File.stdout();
 
         return Self{
             .allocator = allocator,
+            .io = io,
             .resource = resource,
             .file = file,
             .owns_file = options.file_path != null,
@@ -57,7 +58,7 @@ pub const FileExporter = struct {
 
     pub fn deinit(self: *Self) void {
         if (self.owns_file) {
-            self.file.close(runtime.io());
+            self.file.close(self.io);
         }
     }
 
@@ -119,20 +120,21 @@ pub const FileExporter = struct {
         };
 
         // Write using the OTLP ExportFile function
-        try otlp.ExportFile(self.allocator, signal_data, &self.file);
+        try otlp.ExportFile(self.allocator, self.io, signal_data, &self.file);
     }
 
     pub fn shutdown(ctx: *anyopaque) anyerror!void {
         const self: *Self = @ptrCast(@alignCast(ctx));
         if (self.owns_file) {
-            self.file.close(runtime.io());
+            self.file.close(self.io);
         }
     }
 };
 
 test "FileExporter init and deinit" {
+    const runtime = @import("runtime");
     const allocator = std.testing.allocator;
 
-    var file_exporter = try FileExporter.init(allocator, Resource.empty(), .{});
+    var file_exporter = try FileExporter.init(allocator, runtime.io(), Resource.empty(), .{});
     defer file_exporter.deinit();
 }

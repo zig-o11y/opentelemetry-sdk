@@ -36,6 +36,7 @@ const MetricReader = @import("../sdk/metrics/reader.zig").MetricReader;
 const MetricExporter = @import("../sdk/metrics/exporter.zig").MetricExporter;
 const InMemoryExporter = @import("../sdk/metrics/exporters/in_memory.zig").InMemoryExporter;
 const StdoutExporter = @import("../sdk/metrics/exporters/stdout.zig").StdoutExporter;
+const runtime = @import("runtime");
 
 // ============================================================================
 // Error Codes
@@ -469,7 +470,7 @@ pub fn gaugeRecordF64(
 /// Returns: Pointer to the MetricExporter, or null on error.
 pub fn metricExporterStdoutCreate() callconv(.c) ?*OtelMetricExporter {
     const allocator = getCAllocator();
-    const result = MetricExporter.Stdout(allocator, null, null) catch return null;
+    const result = MetricExporter.Stdout(allocator, runtime.io(), null, null) catch return null;
     return @ptrCast(result.exporter);
 }
 

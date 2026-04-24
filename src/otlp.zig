@@ -874,6 +874,7 @@ pub fn Export(
 
 pub fn ExportFile(
     allocator: std.mem.Allocator,
+    io: std.Io,
     otlp_payload: Signal.Data,
     file: *std.Io.File,
 ) !void {
@@ -890,12 +891,12 @@ pub fn ExportFile(
     // access is possible.  We do NOT lock here because POSIX flock is not
     // ref-counted: an unlock in this function would permanently release the
     // fd-level lock that the caller intended to hold for the file's lifetime.
-    const stat = try file.stat(runtime.io());
+    const stat = try file.stat(io);
     const offset = stat.size;
 
-    try file.writePositionalAll(runtime.io(), payload, offset);
-    try file.writePositionalAll(runtime.io(), "\n", offset + payload.len);
-    try file.sync(runtime.io());
+    try file.writePositionalAll(io, payload, offset);
+    try file.writePositionalAll(io, "\n", offset + payload.len);
+    try file.sync(io);
 }
 
 // Integration tests

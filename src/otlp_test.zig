@@ -539,7 +539,7 @@ test "otlp ExportFile appends metrics to file" {
     for (0..how_many_lines) |_| {
         var req = try oneDataPointMetricsExportRequest(allocator, null);
         defer req.deinit(allocator);
-        try otlp.ExportFile(allocator, otlp.Signal.Data{ .metrics = req }, &file);
+        try otlp.ExportFile(allocator, runtime.io(), otlp.Signal.Data{ .metrics = req }, &file);
     }
 
     file.close(runtime.io());

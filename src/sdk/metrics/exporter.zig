@@ -89,10 +89,11 @@ pub const MetricExporter = struct {
     /// See https://opentelemetry.io/docs/specs/otel/metrics/sdk_exporters/stdout/.
     pub fn Stdout(
         allocator: std.mem.Allocator,
+        io: std.Io,
         temporality: ?view.TemporalitySelector,
         aggregation: ?view.AggregationSelector,
     ) !struct { exporter: *MetricExporter, stdout: *StdoutExporter } {
-        const stdout = try StdoutExporter.init(allocator);
+        const stdout = try StdoutExporter.init(allocator, io);
         const exporter = try MetricExporter.new(allocator, &stdout.exporter);
         // Default configuration
         exporter.temporality = temporality orelse view.TemporalityCumulative;
@@ -469,6 +470,7 @@ test "metric exporter builder stdout" {
 
     const metric_exporter = try MetricExporter.Stdout(
         std.testing.allocator,
+        runtime.io(),
         null,
         null,
     );

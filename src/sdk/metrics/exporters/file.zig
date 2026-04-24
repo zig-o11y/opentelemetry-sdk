@@ -4,7 +4,6 @@
 //! to a file in JSON Lines format.
 
 const std = @import("std");
-const runtime = @import("runtime");
 
 const log = std.log.scoped(.file_exporter);
 
@@ -31,6 +30,7 @@ pub const FileExporter = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
+    io: std.Io,
     exporter: ExporterImpl,
     temporality: view.TemporalitySelector,
     file: std.Io.File,
@@ -43,18 +43,19 @@ pub const FileExporter = struct {
         append: bool = true,
     };
 
-    pub fn init(allocator: std.mem.Allocator, temporality: view.TemporalitySelector, options: Options) !*Self {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, temporality: view.TemporalitySelector, options: Options) !*Self {
         const file = if (options.file_path) |path| blk: {
             const flags: std.Io.Dir.CreateFileOptions = if (options.append)
                 .{ .read = true, .truncate = false, .lock = .exclusive }
             else
                 .{ .read = true, .truncate = true };
-            break :blk try runtime.fs.cwdCreateFile(path, flags);
+            break :blk try std.Io.Dir.cwd().createFile(io, path, flags);
         } else std.Io.File.stdout();
 
         const self = try allocator.create(Self);
         self.* = Self{
             .allocator = allocator,
+            .io = io,
             .exporter = ExporterImpl{
                 .exportFn = exportBatch,
             },
@@ -67,7 +68,7 @@ pub const FileExporter = struct {
 
     pub fn deinit(self: *Self) void {
         if (self.owns_file) {
-            self.file.close(runtime.io());
+            self.file.close(self.io);
         }
         self.allocator.destroy(self);
     }
@@ -130,7 +131,7 @@ pub const FileExporter = struct {
         };
 
         // Write using the OTLP ExportFile function
-        otlp.ExportFile(self.allocator, signal_data, &self.file) catch |err| {
+        otlp.ExportFile(self.allocator, self.io, signal_data, &self.file) catch |err| {
             log.err("failed to write metrics to file: {s}", .{@errorName(err)});
             return MetricReadError.ExportFailed;
         };
@@ -138,21 +139,24 @@ pub const FileExporter = struct {
 };
 
 test "FileExporter init and deinit" {
+    const runtime = @import("runtime");
     const allocator = std.testing.allocator;
 
-    const file_exporter = try FileExporter.init(allocator, view.DefaultTemporality, .{});
+    const file_exporter = try FileExporter.init(allocator, runtime.io(), view.DefaultTemporality, .{});
     defer file_exporter.deinit();
 }
 
 test "FileExporter export to file" {
+    const runtime = @import("runtime");
     const allocator = std.testing.allocator;
+    const io = runtime.io();
     const test_file = "test_metrics_file.jsonl";
 
     // Clean up any existing test file
-    runtime.fs.cwdDeleteFile(test_file) catch {};
-    defer runtime.fs.cwdDeleteFile(test_file) catch {};
+    std.Io.Dir.cwd().deleteFile(io, test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, test_file) catch {};
 
-    const file_exporter = try FileExporter.init(allocator, view.DefaultTemporality, .{
+    const file_exporter = try FileExporter.init(allocator, io, view.DefaultTemporality, .{
         .file_path = test_file,
         .append = false,
     });
@@ -181,15 +185,15 @@ test "FileExporter export to file" {
     try file_exporter.exporter.exportFn(&file_exporter.exporter, metrics);
 
     // Verify the file was created and contains data
-    const file = try runtime.fs.cwdOpenFile(test_file, .{});
-    defer file.close(runtime.io());
+    const file = try std.Io.Dir.cwd().openFile(io, test_file, .{});
+    defer file.close(io);
 
-    const stat = try file.stat(runtime.io());
+    const stat = try file.stat(io);
     try std.testing.expect(stat.size > 0);
 
     const content = try allocator.alloc(u8, @intCast(stat.size));
     defer allocator.free(content);
-    const content_len = try file.readPositionalAll(runtime.io(), content, 0);
+    const content_len = try file.readPositionalAll(io, content, 0);
     const content_slice = content[0..content_len];
 
     // Should contain expected JSON fields
