@@ -204,6 +204,8 @@ pub const OTLPExporter = struct {
                 for (scope_log.log_records.items) |*log_record| {
                     // Clean up log record attributes
                     log_record.attributes.deinit(self.allocator);
+                    if (log_record.trace_id.len > 0) self.allocator.free(log_record.trace_id);
+                    if (log_record.span_id.len > 0) self.allocator.free(log_record.span_id);
                 }
                 scope_log.log_records.deinit(self.allocator);
             }
@@ -220,20 +222,18 @@ pub const OTLPExporter = struct {
             try attributes.append(self.allocator, key_value);
         }
 
-        // Convert trace_id to hex string (16 bytes -> 32 char hex)
+        // Convert trace_id to hex string (16 bytes -> 32 char hex).
+        // Duplicated onto the exporter allocator because bytesToHex returns a
+        // fixed-size array; borrowing its address would escape the stack frame.
         const trace_id_str: []const u8 = if (log_record.trace_id) |tid| blk: {
-            var buf: [32]u8 = undefined;
             const hex = std.fmt.bytesToHex(&tid, .lower);
-            @memcpy(&buf, &hex);
-            break :blk (buf[0..]);
+            break :blk try self.allocator.dupe(u8, &hex);
         } else "";
 
         // Convert span_id to hex string (8 bytes -> 16 char hex)
         const span_id_str: []const u8 = if (log_record.span_id) |sid| blk: {
-            var buf: [16]u8 = undefined;
             const hex = std.fmt.bytesToHex(&sid, .lower);
-            @memcpy(&buf, &hex);
-            break :blk (buf[0..]);
+            break :blk try self.allocator.dupe(u8, &hex);
         } else "";
 
         // Convert body to AnyValue
@@ -409,7 +409,11 @@ test "Log record to OTLP conversion with all fields" {
     };
 
     var otlp_log = try exporter.logRecordToOTLP(log_record);
-    defer otlp_log.attributes.deinit(allocator);
+    defer {
+        otlp_log.attributes.deinit(allocator);
+        if (otlp_log.trace_id.len > 0) allocator.free(otlp_log.trace_id);
+        if (otlp_log.span_id.len > 0) allocator.free(otlp_log.span_id);
+    }
 
     // Verify conversion
     try std.testing.expectEqual(@as(u64, 1234567890000000000), otlp_log.time_unix_nano);
@@ -582,7 +586,11 @@ test "Trace context hex conversion" {
     };
 
     var otlp_log = try exporter.logRecordToOTLP(log_record);
-    defer otlp_log.attributes.deinit(allocator);
+    defer {
+        otlp_log.attributes.deinit(allocator);
+        if (otlp_log.trace_id.len > 0) allocator.free(otlp_log.trace_id);
+        if (otlp_log.span_id.len > 0) allocator.free(otlp_log.span_id);
+    }
 
     // Verify hex conversion (lowercase hex without 0x prefix)
     try std.testing.expectEqualStrings("0123456789abcdef0123456789abcdef", otlp_log.trace_id);
