@@ -544,21 +544,16 @@ test "otlp ExportFile appends metrics to file" {
 
     file.close(runtime.io());
 
-    // Re-open the file for reading
     var filer = try temp_dir.dir.openFile(runtime.io(), "metrics.jsonl", .{});
     defer filer.close(runtime.io());
 
-    // Verify that the file was created and has content
     const stat = try filer.stat(runtime.io());
     try std.testing.expect(stat.size > 0);
-
-    // TODO more assertions
 
     var buffer: [4096]u8 = undefined;
     var reader = filer.reader(runtime.io(), &buffer);
     var lines_count: usize = 0;
     while (try reader.interface.takeDelimiter('\n')) |_| {
-        // Basic validation that we received a non-empty JSON line
         lines_count += 1;
     }
     try std.testing.expectEqual(how_many_lines, lines_count);

@@ -113,6 +113,12 @@ pub fn main() !void {
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
+    // Initialize std.testing.io_instance. The default test runner does this
+    // per-test; without it, std.testing.tmpDir() and other helpers dispatch
+    // through an undefined Io.Threaded and hang on Linux.
+    std.testing.io_instance = .init(allocator, .{});
+    defer std.testing.io_instance.deinit();
+
     // Initialize log capture
     var capture = LogCapture.init(allocator);
     defer capture.deinit();
