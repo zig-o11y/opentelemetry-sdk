@@ -106,6 +106,9 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main() !void {
+    // Print startup message using std.debug to bypass potential std.Io issues
+    std.debug.print("Test runner starting...\n", .{});
+
     var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
@@ -171,6 +174,9 @@ pub fn main() !void {
         };
 
         current_test = friendly_name;
+        if (env.verbose) {
+            try printer.fmt("  starting {s}... ", .{friendly_name});
+        }
         std.testing.allocator_instance = .{};
 
         // Enable log capture for this test

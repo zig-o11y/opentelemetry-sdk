@@ -178,4 +178,3 @@ pub fn waitTimeout(event: *std.Io.Event, ns: u64) (error{Timeout} || std.Io.Canc
 pub fn createEnvMap(allocator: std.mem.Allocator) !EnvMap {
     return std.process.Environ.createMap(.{ .block = currentEnvironBlock() }, allocator);
 }
-

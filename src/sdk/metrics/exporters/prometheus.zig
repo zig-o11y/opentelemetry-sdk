@@ -548,9 +548,9 @@ pub const PrometheusExporter = struct {
                 self.should_stop.store(false, .release);
                 return;
             };
-            wake_stream.close(runtime.io());
 
             thread.join();
+            wake_stream.close(runtime.io());
             self.server_thread = null;
             // Reset flag so server can be restarted
             self.should_stop.store(false, .release);

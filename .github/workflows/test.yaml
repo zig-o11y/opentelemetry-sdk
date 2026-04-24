@@ -33,7 +33,8 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
           mirror: 'https://zigmirror.com'
       - run: zig build --fetch
-      - run: zig build test
+      - run: timeout 180 zig build test -Dtest-verbose=true
+        timeout-minutes: 10
 
   build_examples:
     runs-on: ubuntu-latest
