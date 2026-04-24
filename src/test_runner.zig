@@ -129,10 +129,7 @@ pub fn main() !void {
     var skip: usize = 0;
     var leak: usize = 0;
 
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.Io.File.stderr().writer(runtime.io(), &stdout_buffer);
-
-    const printer = Printer.init(&stdout_writer.interface);
+    const printer = Printer.init();
     try printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
 
     // Run setup tests
@@ -282,32 +279,28 @@ pub fn main() !void {
 }
 
 const Printer = struct {
-    var stdout_buf: [8192]u8 = undefined;
-
-    out: *std.Io.Writer,
-
-    fn init(writer: *std.Io.Writer) Printer {
-        return Printer{
-            .out = writer,
-        };
+    fn init() Printer {
+        return .{};
     }
 
     fn fmt(self: Printer, comptime format: []const u8, args: anytype) !void {
-        try self.out.print(format, args);
-        try self.out.flush();
+        _ = self;
+        // Bypass std.Io to avoid any threaded-runtime dependency for test
+        // progress output. std.debug.print writes directly to stderr.
+        std.debug.print(format, args);
     }
 
     fn status(self: Printer, s: Status, comptime format: []const u8, args: anytype) !void {
+        _ = self;
         const color = switch (s) {
             .pass => "\x1b[32m",
             .fail => "\x1b[31m",
             .skip => "\x1b[33m",
             else => "",
         };
-        try self.out.print("{s}", .{color});
-        try self.out.print(format, args);
-        try self.fmt("\x1b[0m", .{});
-        try self.out.flush();
+        std.debug.print("{s}", .{color});
+        std.debug.print(format, args);
+        std.debug.print("\x1b[0m", .{});
     }
 };
 
