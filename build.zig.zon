@@ -31,6 +31,13 @@
             .url = "git+https://github.com/zig-o11y/opentelemetry-proto?ref=main#c43bd4c4db96fd839c594b7b701b44866b19457e",
             .hash = "opentelemetry_proto-1.10.3-S4Y0u6zjAgBXl5JQ75DnsV5L2DsJeRzbgbYLSDTkl-f9",
         },
+        // Bundled so the SDK stays self-contained for cross-compilation
+        // targets that don't ship a zlib in their sysroot (e.g. Windows).
+        .zlib = .{
+            .url = "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
+            .hash = "N-V-__8AAB0eQwD-0MdOEBmz7intriBReIsIDNlukNVoNu6o",
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",

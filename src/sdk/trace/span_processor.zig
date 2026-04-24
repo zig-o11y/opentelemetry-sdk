@@ -122,6 +122,9 @@ pub const SimpleProcessor = struct {
     }
 
     fn onEnd(ctx: *anyopaque, span: trace.Span) void {
+        // Only process recording spans
+        if (!span.is_recording) return;
+
         const self: *Self = @ptrCast(@alignCast(ctx));
 
         self.mutex.lockUncancelable(self.io);
@@ -233,6 +236,9 @@ pub const BatchingProcessor = struct {
     }
 
     fn onEnd(ctx: *anyopaque, span: trace.Span) void {
+        // Only process recording spans
+        if (!span.is_recording) return;
+
         const self: *Self = @ptrCast(@alignCast(ctx));
 
         self.mutex.lockUncancelable(self.io);
@@ -302,7 +308,12 @@ pub const BatchingProcessor = struct {
             // wake.set() between the previous iteration's unlock and the
             // reset below, the signal is lost and we block for the full
             // scheduled_delay_millis even though a batch is queued.
-            const should_wait = self.queue.len < self.max_export_batch_size;
+            // When max_export_batch_size == 0 (e.g. max_queue_size == 0 via
+            // OTEL_BSP_MAX_QUEUE_SIZE=0) the naive `len < batch` comparison
+            // is false for an empty queue and would spin; always wait in
+            // that degenerate case.
+            const should_wait = self.max_export_batch_size == 0 or
+                self.queue.len < self.max_export_batch_size;
             if (should_wait) self.wake.reset();
             self.mutex.unlock(self.io);
 

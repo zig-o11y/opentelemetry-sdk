@@ -322,7 +322,12 @@ pub const BatchingLogRecordProcessor = struct {
             // wake.set() between the previous iteration's unlock and the
             // reset below, the signal is lost and we block for the full
             // scheduled_delay_millis even though a batch is queued.
-            const should_wait = self.queue.len < self.max_export_batch_size;
+            // When max_export_batch_size == 0 (e.g. max_queue_size == 0 via
+            // OTEL_BLRP_MAX_QUEUE_SIZE=0) the naive `len < batch` comparison
+            // is false for an empty queue and would spin; always wait in
+            // that degenerate case.
+            const should_wait = self.max_export_batch_size == 0 or
+                self.queue.len < self.max_export_batch_size;
             if (should_wait) self.wake.reset();
             self.mutex.unlock(self.io);
 
