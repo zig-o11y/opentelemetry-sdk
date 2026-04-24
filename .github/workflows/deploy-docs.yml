@@ -16,6 +16,7 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
           mirror: 'https://zigmirror.com'
+      - run: zig build --fetch
       - run: zig build docs
 
       - name: Upload Pages artifact

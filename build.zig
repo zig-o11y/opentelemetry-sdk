@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) !void {
 
     // Build zlib from source so the SDK is self-contained for cross targets
     // whose sysroot does not ship a zlib (e.g. x86_64-windows).
-    const zlib_upstream = b.lazyDependency("zlib", .{}) orelse return error.MissingZlibDependency;
+    const zlib_upstream = b.dependency("zlib", .{});
     const zlib_lib = b.addLibrary(.{
         .name = "z",
         .linkage = .static,

@@ -32,6 +32,7 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
           mirror: 'https://zigmirror.com'
+      - run: zig build --fetch
       - run: zig build test
 
   build_examples:
@@ -42,8 +43,9 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
           mirror: 'https://zigmirror.com'
+      - run: zig build --fetch
       - run: zig build examples
- 
+
   # Execute bencharmks only if the PR has a specific label 'run::benchmarks'
   benchmarks:
     if: contains(github.event.pull_request.labels.*.name, 'run::benchmarks')
@@ -54,6 +56,7 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
           mirror: 'https://zigmirror.com'
+      - run: zig build --fetch
       # The optimize argument builds the SDK library with optimizations,
       # benchmarks files are always compiled with ReleaseFast.
       - run: |
