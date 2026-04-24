@@ -22,8 +22,6 @@ This is an implementation of the [OpenTelemetry](https://opentelemetry.io) speci
 
 The version of the OpenTelemetry specification targeted here is **1.48.0**.
 
-> **Build Requirements:** This SDK requires `libc` and the system `zlib` library to be available on the target platform. Ensure both are installed before building.
-
 ## Goals
 
 1. Provide a Zig library implementing the _stable_ features of an OpenTelemetry SDK

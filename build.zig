@@ -31,48 +31,6 @@ pub fn build(b: *std.Build) !void {
         .link_libc = true,
     });
 
-    // Build zlib from source so the SDK is self-contained for cross targets
-    // whose sysroot does not ship a zlib (e.g. x86_64-windows).
-    const zlib_upstream = b.dependency("zlib", .{});
-    const zlib_lib = b.addLibrary(.{
-        .name = "z",
-        .linkage = .static,
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-    });
-    zlib_lib.root_module.addIncludePath(zlib_upstream.path(""));
-    zlib_lib.root_module.addCSourceFiles(.{
-        .root = zlib_upstream.path(""),
-        .files = &.{
-            "adler32.c",
-            "compress.c",
-            "crc32.c",
-            "deflate.c",
-            "gzclose.c",
-            "gzlib.c",
-            "gzread.c",
-            "gzwrite.c",
-            "inflate.c",
-            "infback.c",
-            "inftrees.c",
-            "inffast.c",
-            "trees.c",
-            "uncompr.c",
-            "zutil.c",
-        },
-        .flags = &.{
-            "-DHAVE_SYS_TYPES_H",
-            "-DHAVE_STDINT_H",
-            "-DHAVE_STDDEF_H",
-            "-DZ_HAVE_UNISTD_H",
-            // Disable UBSan for C code to avoid linking issues
-            "-fno-sanitize=undefined",
-        },
-    });
-
     // Modules section
     const sdk_mod = b.addModule("sdk", .{
         .root_source_file = b.path("src/sdk.zig"),
@@ -87,8 +45,6 @@ pub fn build(b: *std.Build) !void {
             .{ .name = "runtime", .module = runtime_mod },
         },
     });
-    sdk_mod.addIncludePath(zlib_upstream.path(""));
-    sdk_mod.linkLibrary(zlib_lib);
 
     // Static library for the OpenTelemetry SDK C users
     const sdk_lib_mod = b.createModule(.{
@@ -102,8 +58,6 @@ pub fn build(b: *std.Build) !void {
             .{ .name = "runtime", .module = runtime_mod },
         },
     });
-    sdk_lib_mod.addIncludePath(zlib_upstream.path(""));
-    sdk_lib_mod.linkLibrary(zlib_lib);
     const sdk_lib = b.addLibrary(.{
         .name = "opentelemetry-sdk",
         .linkage = .static,

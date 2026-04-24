@@ -10,9 +10,7 @@ const std = @import("std");
 const runtime = @import("runtime");
 const http = std.http;
 const Uri = std.Uri;
-const zlib = @cImport({
-    @cInclude("zlib.h");
-});
+const flate = std.compress.flate;
 
 const log = std.log.scoped(.otlp);
 
@@ -494,56 +492,20 @@ pub const ExpBackoffconfig = struct {
     max_delay_ms: u64 = 60000,
 };
 
-/// Compress data using gzip format via zlib C library.
+/// Compress data using gzip format via std.compress.flate.
 /// Returns allocated slice owned by the caller.
-/// compression_level should be between 0-9, or zlib.Z_DEFAULT_COMPRESSION.
-fn compressGzip(allocator: std.mem.Allocator, input: []const u8, compression_level: c_int) ![]u8 {
-    // Initialize zlib stream
-    var stream: zlib.z_stream = undefined;
-    stream.zalloc = null;
-    stream.zfree = null;
-    stream.@"opaque" = null;
+fn compressGzip(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var out_alloc = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
+    errdefer out_alloc.deinit();
 
-    // Use deflateInit2 to specify gzip format
-    // windowBits = 15 + 16 for gzip format (15 is the default, +16 adds gzip wrapper)
-    const init_result = zlib.deflateInit2_(
-        &stream,
-        compression_level,
-        zlib.Z_DEFLATED,
-        15 + 16, // gzip format
-        8, // default memory level
-        zlib.Z_DEFAULT_STRATEGY,
-        zlib.ZLIB_VERSION,
-        @sizeOf(zlib.z_stream),
-    );
-    if (init_result != zlib.Z_OK) {
-        return error.CompressionInitFailed;
-    }
-    defer _ = zlib.deflateEnd(&stream);
+    const window = try allocator.alloc(u8, flate.max_window_len);
+    defer allocator.free(window);
 
-    // Allocate output buffer
-    // Worst case: slightly larger than input due to headers
-    const max_compressed_size = zlib.deflateBound(&stream, @intCast(input.len));
-    const output = try allocator.alloc(u8, @intCast(max_compressed_size));
-    errdefer allocator.free(output);
+    var compress = try flate.Compress.init(&out_alloc.writer, window, .gzip, .level_9);
+    try compress.writer.writeAll(input);
+    try compress.finish();
 
-    // Set up input and output
-    stream.avail_in = @intCast(input.len);
-    stream.next_in = @constCast(input.ptr);
-    stream.avail_out = @intCast(max_compressed_size);
-    stream.next_out = output.ptr;
-
-    // Compress
-    const deflate_result = zlib.deflate(&stream, zlib.Z_FINISH);
-    if (deflate_result != zlib.Z_STREAM_END) {
-        allocator.free(output);
-        return error.CompressionFailed;
-    }
-
-    // Resize to actual compressed size
-    const compressed_size: usize = @intCast(stream.total_out);
-    const result = try allocator.realloc(output, compressed_size);
-    return result;
+    return try out_alloc.toOwnedSlice();
 }
 
 /// Handles the data transfer for HTTP-based OTLP.
@@ -614,9 +576,8 @@ const HTTPClient = struct {
             switch (self.config.compression) {
                 .none => break :req try self.allocator.dupe(u8, input_data),
                 .gzip => {
-                    // Compress the data using gzip via zlib C library.
-                    // Maximum compression level (9), favor minimum network transfer over CPU usage.
-                    break :req try compressGzip(self.allocator, input_data, zlib.Z_BEST_COMPRESSION);
+                    // Compress with max level (9), favor minimum network transfer over CPU usage.
+                    break :req try compressGzip(self.allocator, input_data);
                 },
             }
         };
