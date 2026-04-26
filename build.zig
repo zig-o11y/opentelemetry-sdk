@@ -47,7 +47,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     // Static library for the OpenTelemetry SDK C users
-    const sdk_lib_mod = b.createModule(.{
+    const sdk_c_lib_mod = b.createModule(.{
         .root_source_file = b.path("src/c.zig"),
         .target = target,
         .optimize = optimize,
