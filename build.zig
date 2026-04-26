@@ -61,7 +61,7 @@ pub fn build(b: *std.Build) !void {
     const sdk_lib = b.addLibrary(.{
         .name = "opentelemetry-sdk",
         .linkage = .static,
-        .root_module = sdk_lib_mod,
+        .root_module = sdk_c_lib_mod,
     });
 
     b.installArtifact(sdk_lib);
