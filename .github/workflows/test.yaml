@@ -14,7 +14,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
@@ -62,7 +62,7 @@ jobs:
       # benchmarks files are always compiled with ReleaseFast.
       - run: |
           zig build benchmarks -Doptimize=ReleaseFast -Dbenchmark-output=benchmarks-result.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: benchmarks-result
           path: benchmarks-result.txt

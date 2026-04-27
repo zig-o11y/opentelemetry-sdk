@@ -191,6 +191,9 @@ pub fn build(b: *std.Build) !void {
 
     const benchmark_mod = benchmarks_dep.module("zbench");
 
+    var captured_stderr: std.ArrayList(std.Build.LazyPath) = .empty;
+    defer captured_stderr.deinit(b.allocator);
+
     const benchmarked_signals: []const []const u8 = &.{ "logs", "metrics", "trace" };
     for (benchmarked_signals) |signal| {
         const signal_benchmarks = buildBenchmarks(b, b.path(b.pathJoin(&.{ "benchmarks", signal })), sdk_mod, benchmark_mod, clock_mod, env_mod, benchmark_debug) catch |err| {
@@ -201,14 +204,22 @@ pub fn build(b: *std.Build) !void {
         for (signal_benchmarks) |step| {
             const run_signal_benchmark = b.addRunArtifact(step);
 
-            // If output file is specified, redirect stderr to file
-            if (benchmark_output) |output_path| {
-                // Set stderr to write to file
-                run_signal_benchmark.setEnvironmentVariable("BENCHMARK_OUTPUT_FILE", output_path);
+            if (benchmark_output != null) {
+                try captured_stderr.append(b.allocator, run_signal_benchmark.captureStdErr(.{}));
             }
 
             benchmarks_step.dependOn(&run_signal_benchmark.step);
         }
+    }
+
+    if (benchmark_output) |output_path| {
+        const concat = b.addSystemCommand(&.{"cat"});
+        for (captured_stderr.items) |p| concat.addFileArg(p);
+        const merged = concat.captureStdOut(.{});
+
+        const write = b.addUpdateSourceFiles();
+        write.addCopyFileToSource(merged, output_path);
+        benchmarks_step.dependOn(&write.step);
     }
 
     // Integration tests step
