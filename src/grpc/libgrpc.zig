@@ -5,7 +5,8 @@ const Allocator = std.mem.Allocator;
 
 const log = std.log.scoped(.grpc_transport);
 
-pub const Configuration = @import("config.zig").Configuration;
+const configuration = @import("config.zig");
+pub const Configuration = configuration.Configuration;
 
 /// Send a pre-encoded protobuf payload to a gRPC endpoint.
 ///
@@ -73,34 +74,29 @@ pub fn send(
     }
 }
 
-/// Selects the gRPC channel credentials based on `config.insecure` and the
-/// presence of TLS material. See `Configuration.insecure` for the full table.
+/// Builds the gRPC channel credentials for the given configuration.
+/// The decision is made by `configuration.pickCredential`; this function only
+/// constructs the credential object the decision points to.
 ///
 /// TODO: support UDS endpoints (e.g. "unix:/var/run/otel.sock"). Over UDS,
 /// libgrpc's LOCAL credentials provide PRIVACY_AND_INTEGRITY (the TCP variant
 /// used here only checks the peer is loopback and provides no encryption), so
 /// they would become the right default once the endpoint type can express UDS.
 fn makeCredentials(arena: Allocator, config: Configuration) !grpc.client.Credentials {
-    if (config.insecure) |insecure| {
-        if (insecure) {
-            log.debug("Selecting insecure credentials", .{});
-            return .insecure();
-        }
-        return makeSSLCredentials(arena, config);
-    }
-    if (config.server_root_certificates_filename != null or
-        config.client_certificate_filename != null or
-        config.client_private_key_filename != null)
-        return makeSSLCredentials(arena, config);
-    // No explicit choice and no TLS material: fall back to LOCAL_TCP. It is
-    // plaintext, but gRPC rejects the connection at handshake time when the
-    // peer is not on loopback — so a misconfigured remote endpoint fails
-    // closed instead of silently exfiltrating cleartext.
-    log.debug("Selecting local TCP credentials", .{});
-    return .localTCP();
+    const choice = configuration.pickCredential(config);
+    log.debug("Selecting {t} credentials", .{choice});
+    return switch (choice) {
+        .insecure => .insecure(),
+        // local_tcp is plaintext, but gRPC rejects the connection at handshake
+        // time when the peer is not on loopback — so a misconfigured remote
+        // endpoint fails closed instead of silently exfiltrating cleartext.
+        .local_tcp => .localTCP(),
+        .local_uds => .localUDS(),
+        .ssl => makeSSLCredentials(arena, config),
+    };
 }
 
-inline fn readFile(allocator: Allocator, filename: []const u8) ![:0]u8 {
+fn readFile(allocator: Allocator, filename: []const u8) ![:0]u8 {
     const max_size: usize = 1 << 20; // 1MiB
 
     return std.fs.cwd().readFileAllocOptions(
@@ -113,7 +109,14 @@ inline fn readFile(allocator: Allocator, filename: []const u8) ![:0]u8 {
     );
 }
 
-/// An arena is required as it will leak the files content
+/// Builds SSL credentials from the configured PEM files.
+///
+/// Lifetime: gRPC copies `pem_root_certs` internally, but the client
+/// `cert_chain` and `private_key` buffers passed via SSLKeyCertPair are
+/// retained by reference (see grpc/src/core/credentials/transport/ssl/
+/// ssl_credentials.cc::build_config). They must outlive the returned
+/// credentials. The caller passes an arena freed only after
+/// `credentials.deinit()` to satisfy this — `send()` arranges that ordering.
 fn makeSSLCredentials(arena: Allocator, config: Configuration) !grpc.client.Credentials {
     var root_certs: ?[:0]u8 = null;
     var client_key_cert: ?*grpc.SSLKeyCertPair = null;
@@ -129,9 +132,15 @@ fn makeSSLCredentials(arena: Allocator, config: Configuration) !grpc.client.Cred
             client_key_cert.?.certificate_chain = try readFile(arena, cert_filename);
         }
     }
-    log.debug("Selecting SSL credentials {s}, {s} a provided client key/certificate", .{
-        if (root_certs != null) "with a provided server root certificates" else "using server root certificates in GRPC_DEFAULT_SSL_ROOTS_FILE_PATH or in system directories",
+    log.debug("SSL: {s}, {s} a client key/certificate pair", .{
+        if (root_certs != null) "using configured server root certificates" else "using server root certificates from GRPC_DEFAULT_SSL_ROOTS_FILE_PATH or system directories",
         if (client_key_cert != null) "with" else "without",
     });
     return .ssl(root_certs, client_key_cert);
+}
+
+test {
+    // Pull config tests into this module's test suite so they run regardless
+    // of which gRPC backend is selected at build time.
+    _ = @import("config.zig");
 }

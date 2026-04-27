@@ -145,10 +145,13 @@ pub fn build(b: *std.Build) !void {
     test_options.addOption(bool, "fail_first", test_fail_first);
     test_options.addOption(bool, "show_logs", test_show_logs);
     sdk_unit_tests.root_module.addOptions("test_options", test_options);
+    test_step.dependOn(&b.addRunArtifact(sdk_unit_tests).step);
 
-    const run_sdk_unit_tests = b.addRunArtifact(sdk_unit_tests);
-
-    test_step.dependOn(&run_sdk_unit_tests.step);
+    const grpc_transport_unit_tests = b.addTest(.{
+        .root_module = grpc_transport_mod,
+        .filters = b.args orelse &[0][]const u8{},
+    });
+    test_step.dependOn(&b.addRunArtifact(grpc_transport_unit_tests).step);
 
     // Examples
     const examples_step = b.step("examples", "Build and run all examples");
