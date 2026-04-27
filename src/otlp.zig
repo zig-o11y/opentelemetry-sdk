@@ -804,7 +804,14 @@ pub fn Export(
 
             break :blk http_client.send(url, payload);
         },
-        .grpc => grpc_transport.send(allocator, config.endpoint, config.timeout_sec, otlp_payload.signal().grpcPath(), payload),
+        .grpc => grpc_transport.send(allocator, otlp_payload.signal().grpcPath(), payload, .{
+            .endpoint = config.endpoint,
+            .insecure = config.insecure,
+            .timeout_sec = config.timeout_sec,
+            .server_root_certificates_filename = if (config.tls_opts) |tls| tls.certificate_file else null,
+            .client_certificate_filename = if (config.tls_opts) |tls| tls.client_certificate_file else null,
+            .client_private_key_filename = if (config.tls_opts) |tls| tls.client_private_key_file else null,
+        }),
     } catch |err| {
         if (err != ExportError.RequestEnqueuedForRetry)
             log.err("failed to send payload via {t}: {t}", .{ config.protocol, err });

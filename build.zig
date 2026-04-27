@@ -73,14 +73,14 @@ pub fn build(b: *std.Build) !void {
 
     const grpc_transport_mod = switch (grpc_provider) {
         .none, .zig_grpc => b.createModule(.{
-            .root_source_file = b.path("src/grpc_transport_none.zig"),
+            .root_source_file = b.path("src/grpc/noop.zig"),
             .target = target,
             .optimize = optimize,
         }),
         .libgrpc => blk: {
             const cgrpc_dep = b.lazyDependency("cgrpc_wrapper", .{}) orelse return;
             break :blk b.createModule(.{
-                .root_source_file = b.path("src/grpc_transport_libgrpc.zig"),
+                .root_source_file = b.path("src/grpc/libgrpc.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
