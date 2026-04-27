@@ -39,13 +39,28 @@ pub fn send(
 
     const deadline: grpc.Deadline = .{ .duration = @as(i128, config.timeout_sec) * std.time.ns_per_s };
     switch (try grpc.client.rawUnaryCall(gpa, &channel, &queue, path, data, deadline)) {
+        // TODO: handle partial success.
+        // See https://opentelemetry.io/docs/specs/otlp/#partial-success
         .success => |bytes| if (bytes) |b| gpa.free(b),
         .failure => |f| {
             defer gpa.free(f.details);
             log.err("gRPC error {}: {s}", .{ f.code, f.details });
+            // Retryable codes per OTLP spec:
+            // https://opentelemetry.io/docs/specs/otlp/#otlpgrpc-response
+            // TODO: actually perform the retry (with exp. backoff) instead of
+            // delegating it to the caller. Ideally the retry loop lives in a
+            // transport-agnostic layer shared with the HTTP transport.
             return switch (f.toZigError()) {
-                // Retryable: server temporarily unavailable or rate-limited.
-                error.Unavailable, error.ResourceExhausted => error.RequestEnqueuedForRetry,
+                error.Cancelled,
+                error.DeadlineExceeded,
+                error.Aborted,
+                error.OutOfRange,
+                error.Unavailable,
+                error.DataLoss,
+                // RESOURCE_EXHAUSTED is retryable only when the server signals
+                // it via RetryInfo; we don't parse trailers, so treat as retryable.
+                error.ResourceExhausted,
+                => error.RetryableStatusCodeInResponse,
                 else => error.NonRetryableStatusCodeInResponse,
             };
         },
@@ -53,7 +68,8 @@ pub fn send(
             log.err("gRPC batch operation failed (no status available)", .{});
             return error.NonRetryableStatusCodeInResponse;
         },
-        .timeout => return error.Timeout,
+        // Local deadline elapsed: transient by definition.
+        .timeout => return error.RetryableStatusCodeInResponse,
     }
 }
 

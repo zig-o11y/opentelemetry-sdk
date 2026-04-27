@@ -48,7 +48,16 @@ pub const ConfigError = error{
 
 /// Error set for the OTLP Export operation.
 pub const ExportError = error{
+    /// The transport has accepted the request and is retrying it asynchronously
+    /// (e.g. on a detached background thread). The caller should treat this as
+    /// "in flight" and not retry itself.
     RequestEnqueuedForRetry,
+    /// The server returned a retryable status, but the transport did not take
+    /// ownership of the retry. The caller may retry at its discretion.
+    /// TODO: consolidate retry handling in a transport-agnostic layer so
+    /// every transport reports `RequestEnqueuedForRetry` consistently and we
+    /// stop duplicating backoff loops per transport.
+    RetryableStatusCodeInResponse,
     UnimplementedTransportProtocol,
     NonRetryableStatusCodeInResponse,
 };
