@@ -124,7 +124,7 @@ fn makeSSLCredentials(arena: Allocator, config: Configuration) !grpc.client.Cred
     if (config.server_root_certificates_filename) |filename|
         root_certs = try readFile(arena, filename);
     if ((config.client_certificate_filename == null) != (config.client_private_key_filename == null))
-        log.warning("Inconsistent configuration of the client key and certificate, either provide both or neither");
+        log.warn("Inconsistent configuration of the client key and certificate, either provide both or neither", .{});
     if (config.client_certificate_filename) |cert_filename| {
         if (config.client_private_key_filename) |key_filename| {
             client_key_cert = try arena.create(grpc.SSLKeyCertPair);

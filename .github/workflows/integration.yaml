@@ -19,4 +19,4 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
           mirror: 'https://zigmirror.com'
       - name: Run integration tests
-        run: zig build integration
+        run: zig build integration -Dgrpc-provider=libgrpc
