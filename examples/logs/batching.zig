@@ -1,22 +1,25 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
 const sdk = @import("opentelemetry-sdk");
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
     std.debug.print("OpenTelemetry Logs SDK - Batching Example\n", .{});
     std.debug.print("==========================================\n\n", .{});
 
     // Create a stdout exporter
     var stdout_buffer: [4096]u8 = undefined;
-    var stdout_exporter = sdk.logs.StdoutExporter.init(std.Io.File.stdout().writer(runtime.io(), &stdout_buffer));
+    var stdout_exporter = sdk.logs.StdoutExporter.init(std.Io.File.stdout().writer(io, &stdout_buffer));
     const exporter = stdout_exporter.asLogRecordExporter();
 
     // Create a batching processor with custom config
-    var batching_processor = try sdk.logs.BatchingLogRecordProcessor.init(allocator, runtime.io(), exporter, .{
+    var batching_processor = try sdk.logs.BatchingLogRecordProcessor.init(allocator, io, exporter, .{
         .max_queue_size = 1024,
         .max_export_batch_size = 5, // Export every 5 logs
         .scheduled_delay_millis = 1000, // Or every 1 second
@@ -30,7 +33,7 @@ pub fn main() !void {
     const processor = batching_processor.asLogRecordProcessor();
 
     // Create a logger provider
-    var provider = try sdk.logs.LoggerProvider.init(allocator, null);
+    var provider = try sdk.logs.LoggerProvider.init(allocator, io, null);
     defer provider.deinit();
 
     // Add the batching processor
@@ -49,11 +52,11 @@ pub fn main() !void {
     var i: usize = 0;
     while (i < 10) : (i += 1) {
         logger.emit(9, "INFO", "Batched log message", null);
-        runtime.sleep(50 * std.time.ns_per_ms); // Small delay
+        clock.sleep(50 * std.time.ns_per_ms); // Small delay
     }
 
     std.debug.print("\n\nWaiting for background export...\n", .{});
-    runtime.sleep(500 * std.time.ns_per_ms);
+    clock.sleep(500 * std.time.ns_per_ms);
 
     std.debug.print("Force flushing remaining logs...\n", .{});
     try provider.forceFlush();

@@ -1,5 +1,5 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
 
 const log = std.log.scoped(.exporter);
 
@@ -38,6 +38,7 @@ pub const MetricExporter = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
+    io: std.Io,
     exporter: *ExporterImpl,
 
     // Configuration will be passed to the MetricReader.
@@ -59,10 +60,11 @@ pub const MetricExporter = struct {
     //TODO we should have the option to configure the exporter with aggregation and temporality.
     // In a design where MetricExporter is the one dispatching various implementations through
     // associated tyoes, we could have a method to set the configuration.
-    pub fn new(allocator: std.mem.Allocator, exporter: *ExporterImpl) !*Self {
+    pub fn new(allocator: std.mem.Allocator, io: std.Io, exporter: *ExporterImpl) !*Self {
         const s = try allocator.create(Self);
         s.* = Self{
             .allocator = allocator,
+            .io = io,
             .exporter = exporter,
         };
         return s;
@@ -72,11 +74,12 @@ pub const MetricExporter = struct {
     /// See https://opentelemetry.io/docs/specs/otel/metrics/sdk_exporters/in-memory/.
     pub fn InMemory(
         allocator: std.mem.Allocator,
+        io: std.Io,
         temporality: ?view.TemporalitySelector,
         aggregation: ?view.AggregationSelector,
     ) !struct { exporter: *MetricExporter, in_memory: *InMemoryExporter } {
-        const in_mem = try InMemoryExporter.init(allocator);
-        const exporter = try MetricExporter.new(allocator, &in_mem.exporter);
+        const in_mem = try InMemoryExporter.init(allocator, io);
+        const exporter = try MetricExporter.new(allocator, io, &in_mem.exporter);
         // Default configuration
         exporter.temporality = temporality orelse view.TemporalityCumulative;
         exporter.aggregation = aggregation orelse view.DefaultAggregation;
@@ -94,7 +97,7 @@ pub const MetricExporter = struct {
         aggregation: ?view.AggregationSelector,
     ) !struct { exporter: *MetricExporter, stdout: *StdoutExporter } {
         const stdout = try StdoutExporter.init(allocator, io);
-        const exporter = try MetricExporter.new(allocator, &stdout.exporter);
+        const exporter = try MetricExporter.new(allocator, io, &stdout.exporter);
         // Default configuration
         exporter.temporality = temporality orelse view.TemporalityCumulative;
         exporter.aggregation = aggregation orelse view.DefaultAggregation;
@@ -104,14 +107,15 @@ pub const MetricExporter = struct {
 
     pub fn OTLP(
         allocator: std.mem.Allocator,
+        io: std.Io,
         temporality: ?view.TemporalitySelector,
         aggregation: ?view.AggregationSelector,
         options: *otlp.ConfigOptions,
     ) !struct { exporter: *MetricExporter, otlp: *OTLPExporter } {
         const temporality_ = temporality orelse view.DefaultTemporality;
 
-        const otlp_exporter = try OTLPExporter.init(allocator, options, temporality_);
-        const exporter = try MetricExporter.new(allocator, &otlp_exporter.exporter);
+        const otlp_exporter = try OTLPExporter.init(allocator, io, options, temporality_);
+        const exporter = try MetricExporter.new(allocator, io, &otlp_exporter.exporter);
         // Default configuration
         exporter.temporality = temporality_;
         exporter.aggregation = aggregation orelse view.DefaultAggregation;
@@ -129,10 +133,11 @@ pub const MetricExporter = struct {
     /// The HTTP server must be started by calling prometheus.start() and stopped with prometheus.stop().
     pub fn Prometheus(
         allocator: std.mem.Allocator,
+        io: std.Io,
         config: PrometheusExporterConfig,
     ) !struct { exporter: *MetricExporter, prometheus: *PrometheusExporter } {
-        const prometheus = try PrometheusExporter.init(allocator, config);
-        const exporter = try MetricExporter.new(allocator, &prometheus.exporter);
+        const prometheus = try PrometheusExporter.init(allocator, io, config);
+        const exporter = try MetricExporter.new(allocator, io, &prometheus.exporter);
 
         // Prometheus MUST use Cumulative temporality per OpenTelemetry spec
         exporter.temporality = view.TemporalityCumulative;
@@ -152,11 +157,11 @@ pub const MetricExporter = struct {
         }
         // Acquire the lock to signal to forceFlush to wait for export to complete.
         // Also, guarantee that only one export operation is in progress at any time.
-        self.exportCompleted.lockUncancelable(runtime.io());
+        self.exportCompleted.lockUncancelable(self.io);
         defer {
-            self.exportCompleted.unlock(runtime.io());
+            self.exportCompleted.unlock(self.io);
             // Signal any waiting forceFlush callers that export is done.
-            self.exportCompletedEvent.set(runtime.io());
+            self.exportCompletedEvent.set(self.io);
         }
 
         // Little trick to timeout the export operation if needed.
@@ -185,10 +190,10 @@ pub const MetricExporter = struct {
 
     fn exportWorker(self: *Self, metrics: []Measurements, state: *ExportState) void {
         const result = self.exportBatchInternal(metrics);
-        state.mutex.lockUncancelable(runtime.io());
-        defer state.mutex.unlock(runtime.io());
+        state.mutex.lockUncancelable(self.io);
+        defer state.mutex.unlock(self.io);
         state.result = result;
-        state.done.set(runtime.io());
+        state.done.set(self.io);
     }
 
     fn exportBatchWithTimeout(self: *Self, metrics: []Measurements, timeout_ms: u64) ExportResult {
@@ -203,7 +208,7 @@ pub const MetricExporter = struct {
             return self.exportBatchInternal(metrics);
         };
 
-        const timed_out = state.done.waitTimeout(runtime.io(), runtime.timeoutAfterMs(timeout_ms)) == error.Timeout;
+        const timed_out = state.done.waitTimeout(self.io, clock.timeoutAfterMs(timeout_ms)) == error.Timeout;
 
         if (timed_out) {
             // Timeout occurred - we still need to wait for the thread to finish
@@ -227,7 +232,7 @@ pub const MetricExporter = struct {
     pub fn forceFlush(self: *Self, timeout_ms: u64) !void {
         // Fast path: no export in progress
         if (self.exportCompleted.tryLock()) {
-            self.exportCompleted.unlock(runtime.io());
+            self.exportCompleted.unlock(self.io);
             return;
         }
 
@@ -238,14 +243,14 @@ pub const MetricExporter = struct {
         // Try again after resetting — the export may have completed
         // between our first tryLock and the reset.
         if (self.exportCompleted.tryLock()) {
-            self.exportCompleted.unlock(runtime.io());
+            self.exportCompleted.unlock(self.io);
             return;
         }
 
         // Wait for the in-progress export to signal completion.
         _ = self.exportCompletedEvent.waitTimeout(
-            runtime.io(),
-            runtime.timeoutAfterMs(timeout_ms),
+            self.io,
+            clock.timeoutAfterMs(timeout_ms),
         ) catch {
             return MetricReadError.ForceFlushTimedOut;
         };
@@ -282,13 +287,16 @@ fn mockExporter(_: *ExporterImpl, metrics: []Measurements) MetricReadError!void 
 // test harness to build an exporter that times out.
 fn waiterExporter(_: *ExporterImpl, _: []Measurements) MetricReadError!void {
     // Sleep for 1 second to simulate a slow exporter.
-    runtime.sleep(std.time.ns_per_ms * 1000);
+    clock.sleep(std.time.ns_per_ms * 1000);
     return;
 }
 
 test "metric exporter no-op" {
     var noop = ExporterImpl{ .exportFn = noopExporter };
-    var me = try MetricExporter.new(std.testing.allocator, &noop);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var me = try MetricExporter.new(std.testing.allocator, io, &noop);
     defer me.shutdown();
 
     var measure = [1]DataPoint(i64){.{ .value = 42 }};
@@ -308,14 +316,19 @@ test "metric exporter no-op" {
 }
 
 test "metric exporter is called by metric reader" {
-    var mp = try MeterProvider.init(std.testing.allocator);
+    const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();
 
     var mock = ExporterImpl{ .exportFn = mockExporter };
 
-    const metric_exporter = try MetricExporter.new(std.testing.allocator, &mock);
+    const metric_exporter = try MetricExporter.new(std.testing.allocator, io, &mock);
 
-    var rdr = try MetricReader.init(std.testing.allocator, metric_exporter);
+    var rdr = try MetricReader.init(std.testing.allocator, io, metric_exporter);
     defer rdr.shutdown();
 
     try mp.addReader(rdr);
@@ -331,7 +344,10 @@ test "metric exporter is called by metric reader" {
 
 test "metric exporter force flush succeeds" {
     var noop = ExporterImpl{ .exportFn = noopExporter };
-    var me = try MetricExporter.new(std.testing.allocator, &noop);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var me = try MetricExporter.new(std.testing.allocator, io, &noop);
     defer me.shutdown();
 
     var measure = [1]DataPoint(i64){.{ .value = 42 }};
@@ -358,7 +374,10 @@ fn backgroundRunner(me: *MetricExporter, metrics: []Measurements) !void {
 
 test "metric exporter force flush fails" {
     var wait = ExporterImpl{ .exportFn = waiterExporter };
-    var me = try MetricExporter.new(std.testing.allocator, &wait);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var me = try MetricExporter.new(std.testing.allocator, io, &wait);
     defer me.shutdown();
 
     var measure = [1]DataPoint(i64){.{ .value = 42 }};
@@ -381,7 +400,7 @@ test "metric exporter force flush fails" {
     defer bg.join();
 
     // Give the background thread time to acquire the export lock.
-    runtime.sleep(50 * std.time.ns_per_ms);
+    clock.sleep(50 * std.time.ns_per_ms);
 
     // Call forceFlush while the slow export is still in progress.
     // With a 10 ms timeout it should time out well before the 1 s export finishes.
@@ -391,19 +410,22 @@ test "metric exporter force flush fails" {
 
 test "metric exporter exportBatch with timeout" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
     // Create a slow exporter that will exceed the timeout
     const SlowExporter = struct {
         fn exportFn(_: *ExporterImpl, metrics: []Measurements) MetricReadError!void {
             // Sleep for 100ms to simulate slow export
-            runtime.sleep(100 * std.time.ns_per_ms);
+            clock.sleep(100 * std.time.ns_per_ms);
             // Just free the metrics array, not the contents (they're stack-allocated in test)
             allocator.free(metrics);
         }
     };
 
     var slow_exporter = ExporterImpl{ .exportFn = SlowExporter.exportFn };
-    const metric_exporter = try MetricExporter.new(allocator, &slow_exporter);
+    const metric_exporter = try MetricExporter.new(allocator, io, &slow_exporter);
     defer metric_exporter.shutdown();
 
     // Allocate metrics array on the heap
@@ -426,11 +448,17 @@ test "metric exporter exportBatch with timeout" {
 }
 
 test "metric exporter builder in memory" {
-    var mp = try MeterProvider.init(std.testing.allocator);
+    const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();
 
     const metric_exporter = try MetricExporter.InMemory(
         std.testing.allocator,
+        io,
         null,
         null,
     );
@@ -439,7 +467,7 @@ test "metric exporter builder in memory" {
         metric_exporter.in_memory.deinit();
         metric_exporter.exporter.shutdown();
     }
-    const metric_reader = try MetricReader.init(std.testing.allocator, metric_exporter.exporter);
+    const metric_reader = try MetricReader.init(std.testing.allocator, io, metric_exporter.exporter);
     defer metric_reader.shutdown();
 
     try mp.addReader(metric_reader);
@@ -465,12 +493,17 @@ test "metric exporter builder in memory" {
 }
 
 test "metric exporter builder stdout" {
-    var mp = try MeterProvider.init(std.testing.allocator);
+    const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();
 
     const metric_exporter = try MetricExporter.Stdout(
-        std.testing.allocator,
-        runtime.io(),
+        allocator,
+        io,
         null,
         null,
     );
@@ -479,7 +512,7 @@ test "metric exporter builder stdout" {
         // Note: Don't call shutdown here - the MetricReader will handle it
     }
 
-    const metric_reader = try MetricReader.init(std.testing.allocator, metric_exporter.exporter);
+    const metric_reader = try MetricReader.init(std.testing.allocator, io, metric_exporter.exporter);
     defer metric_reader.shutdown();
 
     try mp.addReader(metric_reader);
@@ -504,6 +537,7 @@ pub const ExporterImpl = struct {
 // This is a helper struct to synchronize the background collector thread
 // with the shutdown of the PeriodicExportingReader.
 const ReaderShared = struct {
+    io: std.Io,
     shuttingDown: bool = false,
     wake: std.Io.Event = .unset,
     lock: std.Io.Mutex = .init,
@@ -520,7 +554,7 @@ pub const PeriodicExportingReader = struct {
     exportIntervalMillis: u64,
     exportTimeoutMillis: u64,
 
-    shared: ReaderShared = .{},
+    shared: ReaderShared,
     collectThread: std.Thread = undefined,
 
     // This reader will collect metrics data from the MeterProvider.
@@ -534,6 +568,7 @@ pub const PeriodicExportingReader = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        io: std.Io,
         mp: *MeterProvider,
         exporter: *MetricExporter,
         exportIntervalMs: ?u64,
@@ -544,6 +579,7 @@ pub const PeriodicExportingReader = struct {
 
         const reader = try MetricReader.init(
             allocator,
+            io,
             exporter,
         );
         // Set the export timeout on the reader so it can pass it to exportBatch
@@ -554,6 +590,7 @@ pub const PeriodicExportingReader = struct {
             .reader = reader,
             .exportIntervalMillis = exportIntervalMs orelse defaultExportIntervalMillis,
             .exportTimeoutMillis = timeout,
+            .shared = .{ .io = io },
         };
         try mp.addReader(s.reader);
 
@@ -566,10 +603,10 @@ pub const PeriodicExportingReader = struct {
     }
 
     pub fn shutdown(self: *Self) void {
-        self.shared.lock.lockUncancelable(runtime.io());
+        self.shared.lock.lockUncancelable(self.shared.io);
         self.shared.shuttingDown = true;
-        self.shared.lock.unlock(runtime.io());
-        self.shared.wake.set(runtime.io());
+        self.shared.lock.unlock(self.shared.io);
+        self.shared.wake.set(self.shared.io);
         self.collectThread.join();
 
         self.reader.shutdown();
@@ -589,13 +626,13 @@ fn collectAndExport(
     _: u64, // exportTimeoutMillis - no longer used here, configured on the reader
 ) void {
     while (true) {
-        shared.lock.lockUncancelable(runtime.io());
+        shared.lock.lockUncancelable(shared.io);
         if (shared.shuttingDown) {
-            shared.lock.unlock(runtime.io());
+            shared.lock.unlock(shared.io);
             break;
         }
         shared.wake.reset();
-        shared.lock.unlock(runtime.io());
+        shared.lock.unlock(shared.io);
 
         if (reader.meterProvider) |_| {
             // This will call exporter.exportBatch() with the configured timeout.
@@ -605,26 +642,27 @@ fn collectAndExport(
         } else {
             log.warn("PeriodicExportingReader: no meter provider is registered with this MetricReader {any}", .{reader});
         }
-        _ = shared.wake.waitTimeout(runtime.io(), runtime.timeoutAfterMs(exportIntervalMillis)) catch {};
+        _ = shared.wake.waitTimeout(shared.io, clock.timeoutAfterMs(exportIntervalMillis)) catch {};
     }
 }
 
 test "e2e periodic exporting metric reader" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const mp = try MeterProvider.init(allocator);
+    const mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();
 
     const waiting_ms: u64 = 100;
 
-    var inMem = try InMemoryExporter.init(allocator);
+    var inMem = try InMemoryExporter.init(allocator, io);
     defer inMem.deinit();
 
-    const metric_exporter = try MetricExporter.new(allocator, &inMem.exporter);
+    const metric_exporter = try MetricExporter.new(allocator, io, &inMem.exporter);
 
-    var per = try PeriodicExportingReader.init(
-        allocator,
-        mp,
+    var per = try PeriodicExportingReader.init(allocator, io, mp,
         metric_exporter,
         waiting_ms,
         null,
@@ -652,7 +690,7 @@ test "e2e periodic exporting metric reader" {
 
     // Need to wait for the PeriodicExportingReader to collect and export the metrics.
     // Wait for more than 1 collection cycle to ensure that no duplication of data points occurs.
-    runtime.sleep(waiting_ms * 4 * std.time.ns_per_ms);
+    clock.sleep(waiting_ms * 4 * std.time.ns_per_ms);
 
     const data = try inMem.fetch(allocator);
     defer {

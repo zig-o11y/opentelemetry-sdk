@@ -1,5 +1,4 @@
 const std = @import("std");
-const runtime = @import("runtime");
 const benchmark = @import("benchmark");
 
 const sdk = @import("opentelemetry-sdk");
@@ -19,7 +18,7 @@ threadlocal var thread_rng: ?std.Random.DefaultPrng = null;
 
 fn getThreadRng() *std.Random.DefaultPrng {
     if (thread_rng == null) {
-        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(runtime.timestamp())));
+        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.nanoTimestamp())));
     }
     return &thread_rng.?;
 }
@@ -87,10 +86,14 @@ fn createTestSpan(allocator: std.mem.Allocator, name: []const u8, index: u8) tra
 }
 
 test "SimpleProcessor_OnEnd_Single" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var processor = SimpleProcessor.init(std.testing.allocator, runtime.io(), exporter);
+    var processor = SimpleProcessor.init(std.testing.allocator, io, exporter);
     const span_processor = processor.asSpanProcessor();
 
     var bench = benchmark.Benchmark.init(std.testing.allocator, bench_config);
@@ -119,16 +122,19 @@ test "SimpleProcessor_OnEnd_Single" {
 
     try bench.addParam("SimpleProcessor_OnEnd_Single", &simple_single, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "SimpleProcessor_OnEnd_With_Attributes" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var processor = SimpleProcessor.init(std.testing.allocator, runtime.io(), exporter);
+    var processor = SimpleProcessor.init(std.testing.allocator, io, exporter);
     const span_processor = processor.asSpanProcessor();
 
     var bench = benchmark.Benchmark.init(std.testing.allocator, bench_config);
@@ -165,16 +171,19 @@ test "SimpleProcessor_OnEnd_With_Attributes" {
 
     try bench.addParam("SimpleProcessor_OnEnd_With_Attributes", &simple_with_attrs, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "BatchingProcessor_OnEnd_Single" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var processor = try BatchingProcessor.init(std.testing.allocator, runtime.io(), exporter, .{
+    var processor = try BatchingProcessor.init(std.testing.allocator, io, exporter, .{
         .max_export_batch_size = 512,
         .scheduled_delay_millis = 1000, // Long delay to avoid timing effects
         .max_queue_size = 4096,
@@ -213,16 +222,19 @@ test "BatchingProcessor_OnEnd_Single" {
 
     try bench.addParam("BatchingProcessor_OnEnd_Single", &batch_single, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "BatchingProcessor_OnEnd_With_Attributes" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var processor = try BatchingProcessor.init(std.testing.allocator, runtime.io(), exporter, .{
+    var processor = try BatchingProcessor.init(std.testing.allocator, io, exporter, .{
         .max_export_batch_size = 512,
         .scheduled_delay_millis = 1000, // Long delay to avoid timing effects
         .max_queue_size = 2048,
@@ -267,16 +279,19 @@ test "BatchingProcessor_OnEnd_With_Attributes" {
 
     try bench.addParam("BatchingProcessor_OnEnd_With_Attributes", &batch_with_attrs, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "BatchingProcessor_Batch_Full" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var processor = try BatchingProcessor.init(std.testing.allocator, runtime.io(), exporter, .{
+    var processor = try BatchingProcessor.init(std.testing.allocator, io, exporter, .{
         .max_export_batch_size = 10, // Small batch size to trigger frequent exports
         .scheduled_delay_millis = 100,
         .max_queue_size = 1000,
@@ -328,16 +343,19 @@ test "BatchingProcessor_Batch_Full" {
 
     try bench.addParam("BatchingProcessor_Batch_Full", &batch_full, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "BatchingProcessor_ForceFlush" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var processor = try BatchingProcessor.init(std.testing.allocator, runtime.io(), exporter, .{
+    var processor = try BatchingProcessor.init(std.testing.allocator, io, exporter, .{
         .max_export_batch_size = 512,
         .scheduled_delay_millis = 10000, // Very long delay to rely on force flush
         .max_queue_size = 2048,
@@ -391,19 +409,22 @@ test "BatchingProcessor_ForceFlush" {
 
     try bench.addParam("BatchingProcessor_ForceFlush", &force_flush, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "SpanProcessor_Concurrent" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asSpanExporter();
 
-    var simple_processor = SimpleProcessor.init(std.testing.allocator, runtime.io(), exporter);
+    var simple_processor = SimpleProcessor.init(std.testing.allocator, io, exporter);
     const simple_span_processor = simple_processor.asSpanProcessor();
 
-    var batch_processor = try BatchingProcessor.init(std.testing.allocator, runtime.io(), exporter, .{
+    var batch_processor = try BatchingProcessor.init(std.testing.allocator, io, exporter, .{
         .max_export_batch_size = 100,
         .scheduled_delay_millis = 500,
         .max_queue_size = 1000,
@@ -434,7 +455,6 @@ test "SpanProcessor_Concurrent" {
     };
     try bench.addParam("SpanProcessor_Concurrent_Batch", &concurrent_batch, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }

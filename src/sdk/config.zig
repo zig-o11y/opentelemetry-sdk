@@ -7,7 +7,7 @@
 //! https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/
 
 const std = @import("std");
-const runtime = @import("runtime");
+const env = @import("env");
 
 /// Log level for SDK internal logging
 pub const LogLevel = enum {
@@ -119,7 +119,7 @@ pub const TraceConfig = struct {
         }
     };
 
-    pub fn fromEnv(env_map: *const runtime.EnvMap, allocator: std.mem.Allocator) !TraceConfig {
+    pub fn fromEnv(env_map: *const env.EnvMap, allocator: std.mem.Allocator) !TraceConfig {
         return TraceConfig{
             .sampler = if (env_map.get("OTEL_TRACES_SAMPLER")) |s|
                 Sampler.fromString(s) orelse .parentbased_always_on
@@ -194,7 +194,7 @@ pub const MetricsConfig = struct {
         }
     };
 
-    pub fn fromEnv(env_map: *const runtime.EnvMap, allocator: std.mem.Allocator) !MetricsConfig {
+    pub fn fromEnv(env_map: *const env.EnvMap, allocator: std.mem.Allocator) !MetricsConfig {
         _ = allocator; // No allocations needed for metrics config
         return MetricsConfig{
             .exporter = if (env_map.get("OTEL_METRICS_EXPORTER")) |s|
@@ -245,7 +245,7 @@ pub const LogsConfig = struct {
         }
     };
 
-    pub fn fromEnv(env_map: *const runtime.EnvMap, allocator: std.mem.Allocator) !LogsConfig {
+    pub fn fromEnv(env_map: *const env.EnvMap, allocator: std.mem.Allocator) !LogsConfig {
         _ = allocator; // No allocations needed for logs config
         return LogsConfig{
             .exporter = if (env_map.get("OTEL_LOGS_EXPORTER")) |s|
@@ -284,32 +284,22 @@ trace_config: TraceConfig,
 metrics_config: MetricsConfig,
 logs_config: LogsConfig,
 
-var mutex: std.Io.Mutex = .init;
-
 /// Singleton instance.
-/// Meant to be immutable after initialization.
-var Instance: ?*Configuration = null;
+/// Meant to be immutable after initialization. Stored atomically since this is
+/// a single-pointer write-once-then-read pattern; a mutex is unnecessary.
+var Instance: std.atomic.Value(?*Configuration) = .init(null);
 
 /// Get the configuration singleton if available.
 pub fn get() ?*const Configuration {
-    mutex.lockUncancelable(runtime.io());
-    defer mutex.unlock(runtime.io());
-
-    if (Instance) |cfg| {
-        return cfg;
-    }
-    return null;
+    return Instance.load(.acquire);
 }
 
 /// Set the global configuration singleton.
 pub fn set(cfg: *Configuration) void {
-    mutex.lockUncancelable(runtime.io());
-    defer mutex.unlock(runtime.io());
-
-    Instance = cfg;
+    Instance.store(cfg, .release);
 }
 
-fn fromMap(allocator: std.mem.Allocator, env_map: *const runtime.EnvMap) !*Configuration {
+fn fromMap(allocator: std.mem.Allocator, env_map: *const env.EnvMap) !*Configuration {
     const cfg = try allocator.create(Configuration);
 
     cfg.* = Configuration{
@@ -338,17 +328,28 @@ fn fromMap(allocator: std.mem.Allocator, env_map: *const runtime.EnvMap) !*Confi
 /// Initialize configuration from environment variables.
 /// Caller owns the returned Configuration instance and must call deinit() when done.
 pub fn initFromEnv(allocator: std.mem.Allocator) !*Configuration {
-    var env_map = try runtime.createEnvMap(allocator);
+    var env_map = try env.createEnvMap(allocator);
     defer env_map.deinit();
 
     return try fromMap(allocator, &env_map);
 }
 
-/// Deinitialize and destroy the Configuration (for heap-allocated instances)
-/// This method is safe to call multiple times and from multiple threads
+/// Deinitialize and destroy the Configuration (for heap-allocated instances).
+///
+/// This method atomically claims the singleton instance; only the first caller
+/// actually frees memory. Subsequent calls are no-ops. However, callers must
+/// ensure that no other thread is actively using the Configuration returned by
+/// `get()` before calling `deinit()`, because this function does not wait for
+/// readers to finish.
 pub fn deinit(self: *Configuration) void {
-    mutex.lockUncancelable(runtime.io());
-    defer mutex.unlock(runtime.io());
+    // Atomically claim deinitialization rights.
+    // - If we were the active singleton (prev == self), proceed to free.
+    // - If the singleton was never set (prev == null), we still own our
+    //   memory and must free it ourselves.
+    // - If another Configuration is active (prev != self and prev != null),
+    //   do nothing to avoid use-after-free.
+    const prev = Instance.swap(null, .acq_rel);
+    if (prev != self and prev != null) return;
 
     if (self.service_name) |name| self.allocator.free(name);
     if (self.resource_attributes) |attrs| self.allocator.free(attrs);
@@ -358,7 +359,6 @@ pub fn deinit(self: *Configuration) void {
     self.logs_config.deinit(self.allocator);
 
     self.allocator.destroy(self);
-    Instance = null;
 }
 
 // ============================================================================
@@ -367,7 +367,7 @@ pub fn deinit(self: *Configuration) void {
 
 /// Parse a boolean environment variable
 /// Accepts: "true", "1" for true; "false", "0" for false (case-insensitive)
-fn parseBool(env_map: *const runtime.EnvMap, key: []const u8) ?bool {
+fn parseBool(env_map: *const env.EnvMap, key: []const u8) ?bool {
     const value = env_map.get(key) orelse return null;
     if (std.ascii.eqlIgnoreCase(value, "true") or std.mem.eql(u8, value, "1")) {
         return true;
@@ -379,14 +379,14 @@ fn parseBool(env_map: *const runtime.EnvMap, key: []const u8) ?bool {
 }
 
 /// Parse an integer environment variable
-fn parseInt(comptime T: type, env_map: *const runtime.EnvMap, key: []const u8) ?T {
+fn parseInt(comptime T: type, env_map: *const env.EnvMap, key: []const u8) ?T {
     const value = env_map.get(key) orelse return null;
     return std.fmt.parseInt(T, value, 10) catch null;
 }
 
 /// Parse comma-separated list of propagators
 /// Default: "tracecontext,baggage"
-fn parsePropagators(env_map: *const runtime.EnvMap, allocator: std.mem.Allocator) ![]const TracePropagator {
+fn parsePropagators(env_map: *const env.EnvMap, allocator: std.mem.Allocator) ![]const TracePropagator {
     const default_propagators = &[_]TracePropagator{ .tracecontext, .baggage };
 
     const value = env_map.get("OTEL_PROPAGATORS") orelse {
@@ -424,7 +424,7 @@ fn parsePropagators(env_map: *const runtime.EnvMap, allocator: std.mem.Allocator
 
 test "parseBool - valid values" {
     const allocator = std.testing.allocator;
-    var env_map = runtime.EnvMap.init(allocator);
+    var env_map = env.EnvMap.init(allocator);
     defer env_map.deinit();
 
     try env_map.put("TRUE_VAR", "true");
@@ -445,7 +445,7 @@ test "parseBool - valid values" {
 
 test "parseInt - valid values" {
     const allocator = std.testing.allocator;
-    var env_map = runtime.EnvMap.init(allocator);
+    var env_map = env.EnvMap.init(allocator);
     defer env_map.deinit();
 
     try env_map.put("U32_VAR", "12345");
@@ -482,7 +482,7 @@ test "TracePropagator.fromString" {
 
 test "parsePropagators - default" {
     const allocator = std.testing.allocator;
-    var env_map = runtime.EnvMap.init(allocator);
+    var env_map = env.EnvMap.init(allocator);
     defer env_map.deinit();
 
     const propagators = try parsePropagators(&env_map, allocator);
@@ -495,7 +495,7 @@ test "parsePropagators - default" {
 
 test "parsePropagators - custom" {
     const allocator = std.testing.allocator;
-    var env_map = runtime.EnvMap.init(allocator);
+    var env_map = env.EnvMap.init(allocator);
     defer env_map.deinit();
 
     try env_map.put("OTEL_PROPAGATORS", "b3,jaeger,baggage");
@@ -511,7 +511,7 @@ test "parsePropagators - custom" {
 
 test "parsePropagators - with whitespace" {
     const allocator = std.testing.allocator;
-    var env_map = runtime.EnvMap.init(allocator);
+    var env_map = env.EnvMap.init(allocator);
     defer env_map.deinit();
 
     try env_map.put("OTEL_PROPAGATORS", " tracecontext , baggage , b3 ");
@@ -527,7 +527,7 @@ test "parsePropagators - with whitespace" {
 
 test "TraceConfig.fromEnv - defaults" {
     const allocator = std.testing.allocator;
-    var env_map = runtime.EnvMap.init(allocator);
+    var env_map = env.EnvMap.init(allocator);
     defer env_map.deinit();
 
     var config = try TraceConfig.fromEnv(&env_map, allocator);
@@ -545,7 +545,7 @@ test "TraceConfig.fromEnv - defaults" {
 
 test "TraceConfig.fromEnv - custom values" {
     const allocator = std.testing.allocator;
-    var env_map = runtime.EnvMap.init(allocator);
+    var env_map = env.EnvMap.init(allocator);
     defer env_map.deinit();
 
     try env_map.put("OTEL_TRACES_SAMPLER", "always_on");
@@ -566,7 +566,7 @@ test "TraceConfig.fromEnv - custom values" {
 
 test "MetricsConfig.fromEnv - defaults" {
     const allocator = std.testing.allocator;
-    var env_map = runtime.EnvMap.init(allocator);
+    var env_map = env.EnvMap.init(allocator);
     defer env_map.deinit();
 
     var config = try MetricsConfig.fromEnv(&env_map, allocator);
@@ -580,7 +580,7 @@ test "MetricsConfig.fromEnv - defaults" {
 
 test "MetricsConfig.fromEnv - custom values" {
     const allocator = std.testing.allocator;
-    var env_map = runtime.EnvMap.init(allocator);
+    var env_map = env.EnvMap.init(allocator);
     defer env_map.deinit();
 
     try env_map.put("OTEL_METRICS_EXPORTER", "prometheus");
@@ -597,7 +597,7 @@ test "MetricsConfig.fromEnv - custom values" {
 
 test "LogsConfig.fromEnv - defaults" {
     const allocator = std.testing.allocator;
-    var env_map = runtime.EnvMap.init(allocator);
+    var env_map = env.EnvMap.init(allocator);
     defer env_map.deinit();
 
     var config = try LogsConfig.fromEnv(&env_map, allocator);
@@ -611,7 +611,7 @@ test "LogsConfig.fromEnv - defaults" {
 
 test "LogsConfig.fromEnv - custom values" {
     const allocator = std.testing.allocator;
-    var env_map = runtime.EnvMap.init(allocator);
+    var env_map = env.EnvMap.init(allocator);
     defer env_map.deinit();
 
     try env_map.put("OTEL_LOGS_EXPORTER", "console");
@@ -642,7 +642,7 @@ test "Configuration.initFromEnv - custom values" {
     const allocator = std.testing.allocator;
 
     // Set environment variables
-    var env_map = try runtime.createEnvMap(allocator);
+    var env_map = try env.createEnvMap(allocator);
     defer env_map.deinit();
 
     try env_map.put("OTEL_SDK_DISABLED", "false");
@@ -651,7 +651,7 @@ test "Configuration.initFromEnv - custom values" {
     try env_map.put("OTEL_TRACES_SAMPLER", "always_on");
 
     // Create a new env map and initialize config from it
-    var test_env = runtime.EnvMap.init(allocator);
+    var test_env = env.EnvMap.init(allocator);
     defer test_env.deinit();
 
     try test_env.put("OTEL_SDK_DISABLED", "false");
@@ -684,7 +684,7 @@ test Configuration {
 
 test "Configuration OTEL_SERVICE_NAME default is unknown_service" {
     const allocator = std.testing.allocator;
-    var env_map = runtime.EnvMap.init(allocator);
+    var env_map = env.EnvMap.init(allocator);
     defer env_map.deinit();
 
     const config = try Configuration.fromMap(allocator, &env_map);
@@ -703,7 +703,7 @@ const Context = @import("../api/context/context.zig").Context;
 
 test "Configuration TracerProvider with SDK disabled" {
     const allocator = std.testing.allocator;
-    var testMap = runtime.EnvMap.init(allocator);
+    var testMap = env.EnvMap.init(allocator);
     defer testMap.deinit();
     try testMap.put("OTEL_SDK_DISABLED", "true");
 
@@ -718,9 +718,11 @@ test "Configuration TracerProvider with SDK disabled" {
     const random_generator = RandomIDGenerator.init(default_prng.random());
     const id_gen = IDGenerator{ .Random = random_generator };
 
-    var provider = try TracerProvider.init(allocator, runtime.io(), id_gen);
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var provider = try TracerProvider.init(allocator, io, id_gen);
     defer provider.deinit();
-    defer allocator.destroy(provider);
 
     // Verify SDK is disabled
     try std.testing.expect(provider.sdk_disabled);
@@ -748,7 +750,9 @@ test "ConfigurationMeterProvider with SDK disabled" {
     Configuration.set(config_from_env);
 
     // Create MeterProvider
-    var provider = try MeterProvider.init(allocator);
+    var threaded2: std.Io.Threaded = .init(allocator, .{});
+    defer threaded2.deinit();
+    var provider = try MeterProvider.init(allocator, threaded2.io());
     defer provider.shutdown();
 
     // Verify SDK is disabled
@@ -773,7 +777,9 @@ test "Configuration LoggerProvider with SDK disabled" {
     Configuration.set(config_from_env);
 
     // Create LoggerProvider
-    var provider = try LoggerProvider.init(allocator, null);
+    var threaded3: std.Io.Threaded = .init(allocator, .{});
+    defer threaded3.deinit();
+    var provider = try LoggerProvider.init(allocator, threaded3.io(), null);
     defer provider.deinit();
 
     // Verify SDK is disabled
@@ -811,14 +817,16 @@ test "Configuration SDK disabled with OTEL_SDK_DISABLED=false" {
     const random_generator = RandomIDGenerator.init(default_prng.random());
     const id_gen = IDGenerator{ .Random = random_generator };
 
-    var tracer_provider = try TracerProvider.init(allocator, runtime.io(), id_gen);
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var tracer_provider = try TracerProvider.init(allocator, io, id_gen);
     defer tracer_provider.deinit();
-    defer allocator.destroy(tracer_provider);
 
-    var meter_provider = try MeterProvider.init(allocator);
+    var meter_provider = try MeterProvider.init(allocator, io);
     defer meter_provider.shutdown();
 
-    var logger_provider = try LoggerProvider.init(allocator, null);
+    var logger_provider = try LoggerProvider.init(allocator, io, null);
     defer logger_provider.deinit();
 
     // Verify SDK is NOT disabled

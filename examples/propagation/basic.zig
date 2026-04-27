@@ -11,7 +11,7 @@
 //!   OTEL_PROPAGATORS=none zig build run-propagation-basic
 
 const std = @import("std");
-const runtime = @import("runtime");
+
 const sdk = @import("opentelemetry-sdk");
 
 pub fn main() !void {

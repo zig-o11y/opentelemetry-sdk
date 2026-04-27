@@ -139,17 +139,20 @@ pub const FileExporter = struct {
 };
 
 test "FileExporter init and deinit" {
-    const runtime = @import("runtime");
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const file_exporter = try FileExporter.init(allocator, runtime.io(), view.DefaultTemporality, .{});
+    const file_exporter = try FileExporter.init(allocator, io, view.DefaultTemporality, .{});
     defer file_exporter.deinit();
 }
 
 test "FileExporter export to file" {
-    const runtime = @import("runtime");
     const allocator = std.testing.allocator;
-    const io = runtime.io();
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
     const test_file = "test_metrics_file.jsonl";
 
     // Clean up any existing test file

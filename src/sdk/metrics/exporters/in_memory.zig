@@ -1,5 +1,5 @@
 const std = @import("std");
-const runtime = @import("runtime");
+
 
 const MetricExporter = @import("../exporter.zig").MetricExporter;
 const ExporterImpl = @import("../exporter.zig").ExporterImpl;
@@ -16,16 +16,18 @@ const Attributes = @import("../../../attributes.zig").Attributes;
 pub const InMemoryExporter = struct {
     const Self = @This();
     allocator: std.mem.Allocator,
+    io: std.Io,
     data: std.ArrayListUnmanaged(Measurements) = undefined,
     // Implement the interface via @fieldParentPtr
     exporter: ExporterImpl,
 
     mx: std.Io.Mutex = std.Io.Mutex.init,
 
-    pub fn init(allocator: std.mem.Allocator) !*Self {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) !*Self {
         const s = try allocator.create(Self);
         s.* = Self{
             .allocator = allocator,
+            .io = io,
             .data = .empty,
             .exporter = ExporterImpl{
                 .exportFn = exportBatch,
@@ -34,12 +36,12 @@ pub const InMemoryExporter = struct {
         return s;
     }
     pub fn deinit(self: *Self) void {
-        self.mx.lockUncancelable(runtime.io());
+        self.mx.lockUncancelable(self.io);
         for (self.data.items) |*d| {
             d.*.deinit(self.allocator);
         }
         self.data.deinit(self.allocator);
-        self.mx.unlock(runtime.io());
+        self.mx.unlock(self.io);
 
         self.allocator.destroy(self);
     }
@@ -48,8 +50,8 @@ pub const InMemoryExporter = struct {
     fn exportBatch(iface: *ExporterImpl, metrics: []Measurements) MetricReadError!void {
         // Get a pointer to the instance of the struct that implements the interface.
         const self: *Self = @fieldParentPtr("exporter", iface);
-        self.mx.lockUncancelable(runtime.io());
-        defer self.mx.unlock(runtime.io());
+        self.mx.lockUncancelable(self.io);
+        defer self.mx.unlock(self.io);
 
         // appendSlice will copy the data into the array list,
         // so we need to free their memory after the exportBatch call.
@@ -61,8 +63,8 @@ pub const InMemoryExporter = struct {
 
     /// Read the metrics from the in memory exporter.
     pub fn fetch(self: *Self, allocator: std.mem.Allocator) ![]Measurements {
-        self.mx.lockUncancelable(runtime.io());
-        defer self.mx.unlock(runtime.io());
+        self.mx.lockUncancelable(self.io);
+        defer self.mx.unlock(self.io);
 
         return try self.data.toOwnedSlice(allocator);
     }
@@ -70,11 +72,14 @@ pub const InMemoryExporter = struct {
 
 test "exporters/in_memory" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    var inMemExporter = try InMemoryExporter.init(allocator);
+    var inMemExporter = try InMemoryExporter.init(allocator, io);
     defer inMemExporter.deinit();
 
-    const exporter = try MetricExporter.new(allocator, &inMemExporter.exporter);
+    const exporter = try MetricExporter.new(allocator, io, &inMemExporter.exporter);
     defer exporter.shutdown();
 
     const val = @as(u64, 42);

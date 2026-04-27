@@ -1,5 +1,5 @@
 const std = @import("std");
-const runtime = @import("runtime");
+
 const benchmark = @import("benchmark");
 
 const metrics = @import("opentelemetry-sdk").metrics;
@@ -42,15 +42,18 @@ const ReaderBench = struct {
 };
 
 test "MetricReader_collect" {
-    var mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
-    var me = try MetricExporter.InMemory(std.testing.allocator, null, null);
+    var me = try MetricExporter.InMemory(std.testing.allocator, io, null, null);
     defer me.in_memory.deinit();
 
     const n10k = 10000;
 
-    var reader = try MetricReader.init(std.testing.allocator, me.exporter);
+    var reader = try MetricReader.init(std.testing.allocator, io, me.exporter);
     defer reader.shutdown();
     try mp.addReader(reader);
 
@@ -68,7 +71,6 @@ test "MetricReader_collect" {
 
     try bench.addParam("MetricReader_collect_100k_datapoints", &under_test, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 

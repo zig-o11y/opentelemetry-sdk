@@ -1,5 +1,6 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
+const TestRuntime = @import("../../testing.zig").TestRuntime;
 const trace = @import("../../api/trace.zig");
 const context = @import("../../api/context.zig");
 const SpanExporter = @import("span_exporter.zig").SpanExporter;
@@ -318,7 +319,7 @@ pub const BatchingProcessor = struct {
             self.mutex.unlock(self.io);
 
             if (should_wait) {
-                _ = self.wake.waitTimeout(self.io, runtime.timeoutAfterMs(self.scheduled_delay_millis)) catch {};
+                _ = self.wake.waitTimeout(self.io, clock.timeoutAfterMs(self.scheduled_delay_millis)) catch {};
             }
 
             self.mutex.lockUncancelable(self.io);
@@ -405,6 +406,9 @@ pub const BatchingProcessor = struct {
 
 test "SimpleProcessor basic functionality" {
     const allocator = std.testing.allocator;
+    var rt = TestRuntime.init(allocator);
+    defer rt.deinit();
+    const io = rt.io();
 
     // Mock exporter
     const MockExporter = struct {
@@ -444,7 +448,7 @@ test "SimpleProcessor basic functionality" {
     defer mock_exporter.deinit();
 
     const exporter = mock_exporter.asSpanExporter();
-    var processor = SimpleProcessor.init(allocator, runtime.io(), exporter);
+    var processor = SimpleProcessor.init(allocator, io, exporter);
     const span_processor = processor.asSpanProcessor();
 
     // Create a test span
@@ -471,6 +475,9 @@ test "SimpleProcessor basic functionality" {
 
 test "BatchingProcessor basic functionality" {
     const allocator = std.testing.allocator;
+    var rt = TestRuntime.init(allocator);
+    defer rt.deinit();
+    const io = rt.io();
 
     // Mock exporter (same as above)
     const MockExporter = struct {
@@ -510,7 +517,7 @@ test "BatchingProcessor basic functionality" {
     defer mock_exporter.deinit();
 
     const exporter = mock_exporter.asSpanExporter();
-    var processor = try BatchingProcessor.init(allocator, runtime.io(), exporter, .{
+    var processor = try BatchingProcessor.init(allocator, io, exporter, .{
         .max_export_batch_size = 2, // Small batch size for testing
         .scheduled_delay_millis = 100, // Short delay for testing
     });
@@ -549,7 +556,7 @@ test "BatchingProcessor basic functionality" {
     }
 
     // Wait a bit for the background thread to process
-    runtime.sleep(200 * std.time.ns_per_ms);
+    clock.sleep(200 * std.time.ns_per_ms);
 
     // Force flush to export remaining spans
     try span_processor.forceFlush();

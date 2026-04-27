@@ -1,5 +1,5 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
 
 const attribute = @import("../../attributes.zig");
 const trace = @import("../trace.zig");
@@ -227,7 +227,7 @@ pub const Span = struct {
             .span_context = span_context,
             .name = name,
             .kind = kind,
-            .start_time_unix_nano = @as(u64, @intCast(runtime.nanoTimestamp())),
+            .start_time_unix_nano = @as(u64, @intCast(clock.nanoTimestamp())),
             .end_time_unix_nano = 0,
             .attributes = .empty,
             .events = std.ArrayList(Event).empty,
@@ -310,7 +310,7 @@ pub const Span = struct {
     pub fn addEvent(self: *Self, name: []const u8, timestamp: ?u64, attributes: ?[]const attribute.Attribute) !void {
         if (!self.is_recording) return;
 
-        const event_timestamp = timestamp orelse @as(u64, @intCast(runtime.nanoTimestamp()));
+        const event_timestamp = timestamp orelse @as(u64, @intCast(clock.nanoTimestamp()));
         var event = Event.init(self.allocator, name, event_timestamp);
 
         if (attributes) |attrs| {
@@ -370,7 +370,7 @@ pub const Span = struct {
     pub fn recordException(self: *Self, exception_type: []const u8, message: []const u8, stacktrace: ?[]const u8, attributes: ?[]const attribute.Attribute) !void {
         if (!self.is_recording) return;
 
-        const timestamp = @as(u64, @intCast(runtime.nanoTimestamp()));
+        const timestamp = @as(u64, @intCast(clock.nanoTimestamp()));
         var event = Event.init(self.allocator, "exception", timestamp);
 
         try event.attributes.put(self.allocator, "exception.type", .{ .string = exception_type });
@@ -392,7 +392,7 @@ pub const Span = struct {
     pub fn end(self: *Self, timestamp: ?u64) void {
         if (!self.is_recording) return;
 
-        self.end_time_unix_nano = timestamp orelse @as(u64, @intCast(runtime.nanoTimestamp()));
+        self.end_time_unix_nano = timestamp orelse @as(u64, @intCast(clock.nanoTimestamp()));
         self.is_recording = false;
     }
 };

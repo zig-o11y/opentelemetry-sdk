@@ -1,5 +1,5 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const env = @import("env");
 const trace = @import("../../../api/trace.zig");
 const SpanExporter = @import("../span_exporter.zig").SpanExporter;
 const otlp = @import("../../../otlp.zig");
@@ -17,18 +17,20 @@ const InstrumentationScope = @import("../../../scope.zig").InstrumentationScope;
 /// OTLPExporter exports trace data using the OpenTelemetry Protocol (OTLP)
 pub const OTLPExporter = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     config: *otlp.ConfigOptions,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, config: *otlp.ConfigOptions) !*Self {
-        var env = try runtime.createEnvMap(allocator);
-        defer env.deinit();
-        try config.mergeFromEnvMap(&env);
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, config: *otlp.ConfigOptions) !*Self {
+        var env_map = try env.createEnvMap(allocator);
+        defer env_map.deinit();
+        try config.mergeFromEnvMap(&env_map);
 
         const self = try allocator.create(Self);
         self.* = Self{
             .allocator = allocator,
+            .io = io,
             .config = config,
         };
         return self;
@@ -61,7 +63,7 @@ pub const OTLPExporter = struct {
         const otlp_data = otlp.Signal.Data{ .traces = request };
 
         // Export using the OTLP transport
-        return otlp.Export(self.allocator, self.config, otlp_data);
+        return otlp.Export(self.allocator, self.io, self.config, otlp_data);
     }
 
     fn shutdown(_: *anyopaque) anyerror!void {
@@ -304,11 +306,14 @@ pub const OTLPExporter = struct {
 
 test "OTLPExporter with InstrumentationScope" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
-    var exporter = try OTLPExporter.init(allocator, config);
+    var exporter = try OTLPExporter.init(allocator, io, config);
     defer exporter.deinit();
 
     // Create test spans with different scopes
@@ -374,11 +379,14 @@ test "OTLPExporter with InstrumentationScope" {
 
 test "OTLPExporter basic functionality" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
-    var exporter = try OTLPExporter.init(allocator, config);
+    var exporter = try OTLPExporter.init(allocator, io, config);
     defer exporter.deinit();
 
     const span_exporter = exporter.asSpanExporter();

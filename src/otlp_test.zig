@@ -1,5 +1,5 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
 const http = std.http;
 
 const log = std.log.scoped(.otlp_test);
@@ -21,8 +21,11 @@ const attributesToProtobufKeyValueList = @import("sdk/metrics/exporters/otlp.zig
 
 test "otlp HTTPClient send fails on non-retryable error" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    var server = try HTTPTestServer.init(allocator, badRequest);
+    var server = try HTTPTestServer.init(allocator, io, badRequest);
     defer server.deinit();
 
     // Running the HTTP server in a separate thread is mandatory for each test.
@@ -39,17 +42,21 @@ test "otlp HTTPClient send fails on non-retryable error" {
     var dummy = try emptyMetricsExportRequest(allocator);
     defer dummy.deinit(std.testing.allocator);
 
-    const result = otlp.Export(allocator, config, otlp.Signal.Data{ .metrics = dummy });
+    const result = otlp.Export(allocator, io, config, otlp.Signal.Data{ .metrics = dummy });
     try std.testing.expectError(otlp.ExportError.NonRetryableStatusCodeInResponse, result);
 }
 
 test "otlp HTTPClient send retries on retryable error" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const max_requests: usize = 5;
+    const max_retries: usize = 5;
+    const max_requests: usize = max_retries + 1; // +1 for the initial request
     var req_counter = std.atomic.Value(usize).init(0);
 
-    var server = try HTTPTestServer.init(allocator, tooManyRequests);
+    var server = try HTTPTestServer.init(allocator, io, tooManyRequests);
     defer server.deinit();
     // Running the HTTP server in a separate thread is mandatory for each test.
     // When trying to spawn it in the `HTTPTestServer.init` function, it will fail, but I am not sure why.
@@ -60,7 +67,7 @@ test "otlp HTTPClient send retries on retryable error" {
 
     // Speed up the test
     config.retryConfig = .{
-        .max_retries = max_requests,
+        .max_retries = max_retries,
         .max_delay_ms = 1,
         .base_delay_ms = 1,
     };
@@ -72,11 +79,14 @@ test "otlp HTTPClient send retries on retryable error" {
     var dummy = try emptyMetricsExportRequest(allocator);
     defer dummy.deinit(std.testing.allocator);
 
-    const result = otlp.Export(allocator, config, otlp.Signal.Data{ .metrics = dummy });
+    const result = otlp.Export(allocator, io, config, otlp.Signal.Data{ .metrics = dummy });
     // Assert that we did all the expected requests
     try std.testing.expectError(otlp.ExportError.RequestEnqueuedForRetry, result);
 
     thread.join();
+
+    // Give the detached retry thread time to finish before the test tears down `threaded`.
+    clock.sleep(std.time.ns_per_ms * 10);
 
     // Eventually the non-retryable status code is returned, and we should have received
     // the maximum number of requests.
@@ -85,8 +95,11 @@ test "otlp HTTPClient send retries on retryable error" {
 
 test "otlp HTTPClient uncompressed protobuf metrics payload" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    var server = try HTTPTestServer.init(allocator, assertUncompressedProtobufMetricsBodyCanBeParsed);
+    var server = try HTTPTestServer.init(allocator, io, assertUncompressedProtobufMetricsBodyCanBeParsed);
     defer server.deinit();
 
     const thread = try std.Thread.spawn(.{}, HTTPTestServer.processSingleRequest, .{server});
@@ -101,13 +114,16 @@ test "otlp HTTPClient uncompressed protobuf metrics payload" {
     var req = try oneDataPointMetricsExportRequest(allocator, null);
     defer req.deinit(allocator);
 
-    try otlp.Export(allocator, config, otlp.Signal.Data{ .metrics = req });
+    try otlp.Export(allocator, io, config, otlp.Signal.Data{ .metrics = req });
 }
 
 test "otlp HTTPClient uncompressed json metrics payload" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    var server = try HTTPTestServer.init(allocator, assertUncompressedJsonMetricsBodyCanBeParsed);
+    var server = try HTTPTestServer.init(allocator, io, assertUncompressedJsonMetricsBodyCanBeParsed);
     defer server.deinit();
 
     const thread = try std.Thread.spawn(.{}, HTTPTestServer.processSingleRequest, .{server});
@@ -124,7 +140,7 @@ test "otlp HTTPClient uncompressed json metrics payload" {
     var req = try oneDataPointMetricsExportRequest(allocator, null);
     defer req.deinit(allocator);
 
-    try otlp.Export(allocator, config, otlp.Signal.Data{ .metrics = req });
+    try otlp.Export(allocator, io, config, otlp.Signal.Data{ .metrics = req });
 }
 
 // Some zig-protobuf versions incorrectly serializes `oneof` fields (e.g. AnyValue) with an extra
@@ -132,8 +148,11 @@ test "otlp HTTPClient uncompressed json metrics payload" {
 // See https://github.com/zig-o11y/opentelemetry-sdk/issues/124
 test "otlp HTTPClient http_json payload has correctly formatted attribute values" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    var server = try HTTPTestServer.init(allocator, assertJsonAttributeValueNotDoubleNested);
+    var server = try HTTPTestServer.init(allocator, io, assertJsonAttributeValueNotDoubleNested);
     defer server.deinit();
 
     const thread = try std.Thread.spawn(.{}, HTTPTestServer.processSingleRequest, .{server});
@@ -151,13 +170,16 @@ test "otlp HTTPClient http_json payload has correctly formatted attribute values
     var req = try oneDataPointMetricsExportRequest(allocator, Attributes.with(&attrs_slice));
     defer req.deinit(allocator);
 
-    try otlp.Export(allocator, config, otlp.Signal.Data{ .metrics = req });
+    try otlp.Export(allocator, io, config, otlp.Signal.Data{ .metrics = req });
 }
 
 test "otlp HTTPClient compressed json metrics payload" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    var server = try HTTPTestServer.init(allocator, assertCompressedJsonMetricsBodyCanBeParsed);
+    var server = try HTTPTestServer.init(allocator, io, assertCompressedJsonMetricsBodyCanBeParsed);
     defer server.deinit();
 
     const thread = try std.Thread.spawn(.{}, HTTPTestServer.processSingleRequest, .{server});
@@ -175,13 +197,16 @@ test "otlp HTTPClient compressed json metrics payload" {
     var req = try oneDataPointMetricsExportRequest(allocator, null);
     defer req.deinit(allocator);
 
-    try otlp.Export(allocator, config, otlp.Signal.Data{ .metrics = req });
+    try otlp.Export(allocator, io, config, otlp.Signal.Data{ .metrics = req });
 }
 
 test "otlp HTTPClient compressed protobuf metrics payload" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    var server = try HTTPTestServer.init(allocator, assertCompressionHeaderGzip);
+    var server = try HTTPTestServer.init(allocator, io, assertCompressionHeaderGzip);
     defer server.deinit();
 
     const thread = try std.Thread.spawn(.{}, HTTPTestServer.processSingleRequest, .{server});
@@ -197,13 +222,16 @@ test "otlp HTTPClient compressed protobuf metrics payload" {
     var req = try oneDataPointMetricsExportRequest(allocator, null);
     defer req.deinit(allocator);
 
-    try otlp.Export(allocator, config, otlp.Signal.Data{ .metrics = req });
+    try otlp.Export(allocator, io, config, otlp.Signal.Data{ .metrics = req });
 }
 
 test "otlp HTTPClient send extra headers" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    var server = try HTTPTestServer.init(allocator, assertExtraHeaders);
+    var server = try HTTPTestServer.init(allocator, io, assertExtraHeaders);
     defer server.deinit();
 
     const thread = try std.Thread.spawn(.{}, HTTPTestServer.processSingleRequest, .{server});
@@ -218,7 +246,7 @@ test "otlp HTTPClient send extra headers" {
 
     var dummy = try emptyMetricsExportRequest(allocator);
     defer dummy.deinit(std.testing.allocator);
-    try otlp.Export(allocator, config, otlp.Signal.Data{ .metrics = dummy });
+    try otlp.Export(allocator, io, config, otlp.Signal.Data{ .metrics = dummy });
 }
 
 fn emptyMetricsExportRequest(allocator: std.mem.Allocator) !pbcollector_metrics.ExportMetricsServiceRequest {
@@ -243,7 +271,7 @@ fn oneDataPointMetricsExportRequest(allocator: std.mem.Allocator, data_point_att
     var data_points = try allocator.alloc(pbmetrics.NumberDataPoint, 1);
     const data_points0 = pbmetrics.NumberDataPoint{
         .value = .{ .as_int = 42 },
-        .start_time_unix_nano = @intCast(runtime.nanoTimestamp()),
+        .start_time_unix_nano = @intCast(clock.nanoTimestamp()),
         .attributes = pb_attrs.values,
         .exemplars = .empty,
     };
@@ -440,20 +468,23 @@ const HTTPTestServer = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
+    io: std.Io,
     net_server: std.Io.net.Server,
     behavior: serverBehavior,
 
     fn init(
         allocator: std.mem.Allocator,
+        io: std.Io,
         behavior: serverBehavior,
     ) !*Self {
         const test_server = try allocator.create(HTTPTestServer);
         // Randomized port, can be fetched with port()
         const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
-        const net_server = try address.listen(runtime.io(), .{ .reuse_address = true });
+        const net_server = try address.listen(io, .{ .reuse_address = true });
 
         test_server.* = HTTPTestServer{
             .allocator = allocator,
+            .io = io,
             .net_server = net_server,
             .behavior = behavior,
         };
@@ -462,16 +493,16 @@ const HTTPTestServer = struct {
     }
 
     fn processSingleRequest(self: *Self) void {
-        var stream = self.net_server.accept(runtime.io()) catch |err| {
+        var stream = self.net_server.accept(self.io) catch |err| {
             log.err("Error starting HTTP server: {}", .{err});
             return;
         };
-        defer stream.close(runtime.io());
+        defer stream.close(self.io);
 
         var read_buffer: [8192]u8 = undefined;
         var write_buffer: [8192]u8 = undefined;
-        var conn_reader = stream.reader(runtime.io(), &read_buffer);
-        var conn_writer = stream.writer(runtime.io(), &write_buffer);
+        var conn_reader = stream.reader(self.io, &read_buffer);
+        var conn_writer = stream.writer(self.io, &write_buffer);
         var http_server = std.http.Server.init(&conn_reader.interface, &conn_writer.interface);
 
         var request = http_server.receiveHead() catch |err| {
@@ -486,18 +517,18 @@ const HTTPTestServer = struct {
 
     fn processRequests(self: *Self, maxRequests: usize, reqCounter: *std.atomic.Value(usize)) void {
         while (reqCounter.load(.acquire) < maxRequests) {
-            var stream = self.net_server.accept(runtime.io()) catch |err| {
+            var stream = self.net_server.accept(self.io) catch |err| {
                 log.err("Error starting HTTP server: {}", .{err});
                 return;
             };
-            defer stream.close(runtime.io());
+            defer stream.close(self.io);
 
             const reqNumber = reqCounter.fetchAdd(1, .acq_rel);
 
             var read_buffer: [8192]u8 = undefined;
             var write_buffer: [8192]u8 = undefined;
-            var conn_reader = stream.reader(runtime.io(), &read_buffer);
-            var conn_writer = stream.writer(runtime.io(), &write_buffer);
+            var conn_reader = stream.reader(self.io, &read_buffer);
+            var conn_writer = stream.writer(self.io, &write_buffer);
             var http_server = std.http.Server.init(&conn_reader.interface, &conn_writer.interface);
 
             var request = http_server.receiveHead() catch |err| {
@@ -518,18 +549,21 @@ const HTTPTestServer = struct {
     }
 
     fn deinit(self: *Self) void {
-        self.net_server.deinit(runtime.io());
+        self.net_server.deinit(self.io);
         self.allocator.destroy(self);
     }
 };
 
 test "otlp ExportFile appends metrics to file" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    var file = try temp_dir.dir.createFile(runtime.io(), "metrics.jsonl", .{
+    var file = try temp_dir.dir.createFile(io, "metrics.jsonl", .{
         .read = true,
         .exclusive = true,
     });
@@ -539,19 +573,19 @@ test "otlp ExportFile appends metrics to file" {
     for (0..how_many_lines) |_| {
         var req = try oneDataPointMetricsExportRequest(allocator, null);
         defer req.deinit(allocator);
-        try otlp.ExportFile(allocator, runtime.io(), otlp.Signal.Data{ .metrics = req }, &file);
+        try otlp.ExportFile(allocator, io, otlp.Signal.Data{ .metrics = req }, &file);
     }
 
-    file.close(runtime.io());
+    file.close(io);
 
-    var filer = try temp_dir.dir.openFile(runtime.io(), "metrics.jsonl", .{});
-    defer filer.close(runtime.io());
+    var filer = try temp_dir.dir.openFile(io, "metrics.jsonl", .{});
+    defer filer.close(io);
 
-    const stat = try filer.stat(runtime.io());
+    const stat = try filer.stat(io);
     try std.testing.expect(stat.size > 0);
 
     var buffer: [4096]u8 = undefined;
-    var reader = filer.reader(runtime.io(), &buffer);
+    var reader = filer.reader(io, &buffer);
     var lines_count: usize = 0;
     while (try reader.interface.takeDelimiter('\n')) |_| {
         lines_count += 1;

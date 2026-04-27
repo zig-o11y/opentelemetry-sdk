@@ -1,5 +1,5 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
 const zbench = @import("benchmark");
 
 const sdk = @import("opentelemetry-sdk");
@@ -18,7 +18,7 @@ threadlocal var thread_rng: ?std.Random.DefaultPrng = null;
 
 fn getThreadRng() *std.Random.DefaultPrng {
     if (thread_rng == null) {
-        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(runtime.timestamp())));
+        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(clock.timestamp())));
     }
     return &thread_rng.?;
 }
@@ -38,15 +38,15 @@ const BenchmarkContext = struct {
     exporter: InMemoryExporter,
     processor: SimpleLogRecordProcessor,
 
-    fn init(allocator: std.mem.Allocator) !*BenchmarkContext {
+    fn init(allocator: std.mem.Allocator, io: std.Io) !*BenchmarkContext {
         const ctx = try allocator.create(BenchmarkContext);
         errdefer allocator.destroy(ctx);
 
         ctx.buffer = std.ArrayList(u8).empty;
         ctx.exporter = InMemoryExporter.init(.fromArrayList(allocator, &ctx.buffer));
-        ctx.processor = SimpleLogRecordProcessor.init(allocator, runtime.io(), ctx.exporter.asLogRecordExporter());
+        ctx.processor = SimpleLogRecordProcessor.init(allocator, io, ctx.exporter.asLogRecordExporter());
 
-        ctx.provider = try LoggerProvider.init(allocator, null);
+        ctx.provider = try LoggerProvider.init(allocator, io, null);
         errdefer ctx.provider.deinit();
 
         try ctx.provider.addLogRecordProcessor(ctx.processor.asLogRecordProcessor());
@@ -84,7 +84,10 @@ fn getRandomAttribute(rng: *std.Random.DefaultPrng) Attribute {
 // === BENCHMARK TESTS ===
 
 test "Logger_Emit_W/O_Attributes" {
-    const ctx = try BenchmarkContext.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const ctx = try BenchmarkContext.init(std.testing.allocator, io);
     defer ctx.deinit(std.testing.allocator);
 
     const scope = InstrumentationScope{
@@ -107,13 +110,15 @@ test "Logger_Emit_W/O_Attributes" {
 
     try bench.addParam("Logger_Emit_Without_Attributes", &without_attributes, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Logger_Emit_With_Attributes" {
-    const ctx = try BenchmarkContext.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const ctx = try BenchmarkContext.init(std.testing.allocator, io);
     defer ctx.deinit(std.testing.allocator);
 
     const scope = InstrumentationScope{
@@ -144,13 +149,15 @@ test "Logger_Emit_With_Attributes" {
 
     try bench.addParam("Logger_Emit_With_Attributes", &with_attributes, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Logger_Emit_Different_Severities" {
-    const ctx = try BenchmarkContext.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const ctx = try BenchmarkContext.init(std.testing.allocator, io);
     defer ctx.deinit(std.testing.allocator);
 
     const scope = InstrumentationScope{
@@ -192,13 +199,15 @@ test "Logger_Emit_Different_Severities" {
 
     try bench.addParam("Logger_Emit_Different_Severities", &severities, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Logger_Emit_Small_Body" {
-    const ctx = try BenchmarkContext.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const ctx = try BenchmarkContext.init(std.testing.allocator, io);
     defer ctx.deinit(std.testing.allocator);
 
     const scope = InstrumentationScope{
@@ -219,13 +228,15 @@ test "Logger_Emit_Small_Body" {
 
     try bench.addParam("Logger_Emit_Small_Body", &small_body, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Logger_Emit_Large_Body" {
-    const ctx = try BenchmarkContext.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const ctx = try BenchmarkContext.init(std.testing.allocator, io);
     defer ctx.deinit(std.testing.allocator);
 
     const scope = InstrumentationScope{
@@ -255,13 +266,15 @@ test "Logger_Emit_Large_Body" {
 
     try bench.addParam("Logger_Emit_Large_Body", &large_body, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Logger_Emit_With_Many_Attributes" {
-    const ctx = try BenchmarkContext.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const ctx = try BenchmarkContext.init(std.testing.allocator, io);
     defer ctx.deinit(std.testing.allocator);
 
     const scope = InstrumentationScope{
@@ -297,13 +310,15 @@ test "Logger_Emit_With_Many_Attributes" {
 
     try bench.addParam("Logger_Emit_With_Many_Attributes", &many_attributes, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Logger_Concurrent_Emission" {
-    const ctx = try BenchmarkContext.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const ctx = try BenchmarkContext.init(std.testing.allocator, io);
     defer ctx.deinit(std.testing.allocator);
 
     const scope = InstrumentationScope{
@@ -353,13 +368,15 @@ test "Logger_Concurrent_Emission" {
 
     try bench.addParam("Logger_Concurrent_Emission", &concurrent_logs, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Logger_GetLogger_Same_Scope" {
-    const ctx = try BenchmarkContext.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const ctx = try BenchmarkContext.init(std.testing.allocator, io);
     defer ctx.deinit(std.testing.allocator);
 
     const scope = InstrumentationScope{
@@ -384,7 +401,6 @@ test "Logger_GetLogger_Same_Scope" {
 
     try bench.addParam("Logger_GetLogger_Same_Scope", &get_logger, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }

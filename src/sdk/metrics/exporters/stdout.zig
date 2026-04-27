@@ -75,6 +75,9 @@ pub const StdoutExporter = struct {
 
 test "exporters/stdout" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
     const val = @as(u64, 42);
 
@@ -105,9 +108,6 @@ test "exporters/stdout" {
         .data = .{ .double = hist_measures },
     });
 
-    const runtime = @import("runtime");
-    const io = runtime.io();
-
     // Create a temporary file to check the output
     const filename = "stdout_exporter_test.txt";
     // Delete file if it exists first
@@ -123,7 +123,7 @@ test "exporters/stdout" {
     defer stdoutExporter.deinit();
     stdoutExporter.withOutputFile(file);
 
-    const exporter = try MetricExporter.new(allocator, &stdoutExporter.exporter);
+    const exporter = try MetricExporter.new(allocator, io, &stdoutExporter.exporter);
     defer exporter.shutdown();
 
     const result = exporter.exportBatch(try underTest.toOwnedSlice(allocator), null);

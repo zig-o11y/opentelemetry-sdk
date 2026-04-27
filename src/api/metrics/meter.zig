@@ -1,5 +1,5 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
 
 // NOTE: API-surface mutex operations use lockUncancelable so that user-facing
 // methods do not introduce cancellation points. This is safe with Io.Threaded
@@ -38,12 +38,11 @@ const Configuration = @import("../../sdk/config.zig").Configuration;
 const MetricsConfig = @import("../../sdk/config.zig").MetricsConfig;
 const resource_attributes = @import("../../sdk/resource.zig");
 
-var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
-
 /// MeterProvider is responsble for creating and managing meters.
 /// See https://opentelemetry.io/docs/specs/otel/metrics/api/#meterprovider
 pub const MeterProvider = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     meters: std.HashMapUnmanaged(
         InstrumentationScope,
         Meter,
@@ -63,7 +62,7 @@ pub const MeterProvider = struct {
     const Self = @This();
 
     /// Create a new custom meter provider, using the specified allocator.
-    pub fn init(alloc: std.mem.Allocator) !*Self {
+    pub fn init(alloc: std.mem.Allocator, io: std.Io) !*Self {
         // Access global configuration (transparent to user)
         const cfg = Configuration.get();
         const sdk_disabled = if (cfg) |c| c.sdk_disabled else false;
@@ -71,6 +70,7 @@ pub const MeterProvider = struct {
         const provider = try alloc.create(Self);
         provider.* = Self{
             .allocator = alloc,
+            .io = io,
             .meters = .empty,
             .readers = .empty,
             .views = .empty,
@@ -87,18 +87,10 @@ pub const MeterProvider = struct {
         return provider;
     }
 
-    /// Adopt the default MeterProvider.
-    pub fn default() !*Self {
-        switch (builtin.mode) {
-            .Debug, .ReleaseSafe => return try Self.init(debug_allocator.allocator()),
-            .ReleaseFast, .ReleaseSmall => return try Self.init(std.heap.smp_allocator),
-        }
-    }
-
     /// Delete the meter provider and free up the memory allocated for it,
     /// as well as its owned Meters.
     pub fn shutdown(self: *Self) void {
-        self.mx.lockUncancelable(runtime.io());
+        self.mx.lockUncancelable(self.io);
 
         var meters = self.meters.valueIterator();
         while (meters.next()) |m| {
@@ -115,7 +107,7 @@ pub const MeterProvider = struct {
         }
 
         // Unlock before destroying the struct
-        self.mx.unlock(runtime.io());
+        self.mx.unlock(self.io);
         self.allocator.destroy(self);
     }
 
@@ -125,13 +117,14 @@ pub const MeterProvider = struct {
     /// If a meter with the same name already exists, it will be returned.
     /// See https://opentelemetry.io/docs/specs/otel/metrics/api/#get-a-meter
     pub fn getMeter(self: *Self, scope: InstrumentationScope) !*Meter {
-        self.mx.lockUncancelable(runtime.io());
-        defer self.mx.unlock(runtime.io());
+        self.mx.lockUncancelable(self.io);
+        defer self.mx.unlock(self.io);
 
         const i = Meter{
             .scope = scope,
             .instruments = .empty,
             .allocator = self.allocator,
+            .io = self.io,
         };
 
         const meter = try self.meters.getOrPutValue(self.allocator, scope, i);
@@ -140,8 +133,8 @@ pub const MeterProvider = struct {
     }
 
     pub fn addReader(self: *Self, m: *MetricReader) !void {
-        self.mx.lockUncancelable(runtime.io());
-        defer self.mx.unlock(runtime.io());
+        self.mx.lockUncancelable(self.io);
+        defer self.mx.unlock(self.io);
 
         if (m.meterProvider != null) {
             return spec.ResourceError.MetricReaderAlreadyAttached;
@@ -152,8 +145,8 @@ pub const MeterProvider = struct {
 
     /// Register a view with this meter provider
     pub fn addView(self: *Self, new_view: view.View) !void {
-        self.mx.lockUncancelable(runtime.io());
-        defer self.mx.unlock(runtime.io());
+        self.mx.lockUncancelable(self.io);
+        defer self.mx.unlock(self.io);
 
         try self.views.append(self.allocator, new_view);
     }
@@ -164,8 +157,8 @@ pub const MeterProvider = struct {
         self: *Self,
         metric_exporter: *@import("../../sdk/metrics/exporter.zig").MetricExporter,
     ) !*MetricReader {
-        const mc = self.config.metrics_config;
-        const reader = try MetricReader.init(self.allocator, metric_exporter);
+        const mc = self.config.?.metrics_config;
+        const reader = try MetricReader.init(self.allocator, self.io, metric_exporter);
 
         // Apply export timeout from config
         reader.exportTimeout = mc.export_timeout_ms;
@@ -180,6 +173,7 @@ pub const Meter = struct {
     scope: InstrumentationScope,
     instruments: std.StringHashMapUnmanaged(*Instrument),
     allocator: std.mem.Allocator,
+    io: std.Io,
 
     mx: std.Io.Mutex = std.Io.Mutex.init,
 
@@ -189,8 +183,11 @@ pub const Meter = struct {
     /// This is a monotonic counter that can only be incremented.
     pub fn createCounter(self: *Self, comptime T: type, options: InstrumentOptions) !*Counter(T) {
         var i = try Instrument.new(.Counter, options, self.allocator);
-        const c = try i.counter(T);
-        errdefer self.allocator.destroy(c);
+        const c = i.counter(self.io, T) catch |err| {
+            self.allocator.destroy(i);
+            return err;
+        };
+        errdefer i.deinit();
         try self.registerInstrument(i);
 
         return c;
@@ -200,8 +197,11 @@ pub const Meter = struct {
     /// This is a counter that can be incremented and decremented.
     pub fn createUpDownCounter(self: *Self, comptime T: type, options: InstrumentOptions) !*Counter(T) {
         var i = try Instrument.new(.UpDownCounter, options, self.allocator);
-        const c = try i.upDownCounter(T);
-        errdefer self.allocator.destroy(c);
+        const c = i.upDownCounter(self.io, T) catch |err| {
+            self.allocator.destroy(i);
+            return err;
+        };
+        errdefer i.deinit();
         try self.registerInstrument(i);
 
         return c;
@@ -211,8 +211,11 @@ pub const Meter = struct {
     /// A histogram is a metric that samples observations and counts them in different buckets.
     pub fn createHistogram(self: *Self, comptime T: type, options: InstrumentOptions) !*Histogram(T) {
         var i = try Instrument.new(.Histogram, options, self.allocator);
-        const h = try i.histogram(T);
-        errdefer self.allocator.destroy(h);
+        const h = i.histogram(self.io, T) catch |err| {
+            self.allocator.destroy(i);
+            return err;
+        };
+        errdefer i.deinit();
         try self.registerInstrument(i);
 
         return h;
@@ -223,8 +226,11 @@ pub const Meter = struct {
     /// and represents a point-in-time value.
     pub fn createGauge(self: *Self, comptime T: type, options: InstrumentOptions) !*Gauge(T) {
         var i = try Instrument.new(.Gauge, options, self.allocator);
-        const g = try i.gauge(T);
-        errdefer self.allocator.destroy(g);
+        const g = i.gauge(self.io, T) catch |err| {
+            self.allocator.destroy(i);
+            return err;
+        };
+        errdefer i.deinit();
         try self.registerInstrument(i);
 
         return g;
@@ -240,8 +246,11 @@ pub const Meter = struct {
         callbacks: ?[]AsyncInstrument.ObserveMeasures,
     ) !*AsyncInstrument.ObservableInstrument(.ObservableCounter) {
         var i = try Instrument.new(.ObservableCounter, options, self.allocator);
-        const c = try i.asyncCounter(context, callbacks);
-        errdefer self.allocator.destroy(c);
+        const c = i.asyncCounter(self.io, context, callbacks) catch |err| {
+            self.allocator.destroy(i);
+            return err;
+        };
+        errdefer i.deinit();
         try self.registerInstrument(i);
 
         return c;
@@ -257,8 +266,11 @@ pub const Meter = struct {
         callbacks: ?[]AsyncInstrument.ObserveMeasures,
     ) !*AsyncInstrument.ObservableInstrument(.ObservableUpDownCounter) {
         var i = try Instrument.new(.ObservableUpDownCounter, options, self.allocator);
-        const c = try i.asyncUpDownCounter(context, callbacks);
-        errdefer self.allocator.destroy(c);
+        const c = i.asyncUpDownCounter(self.io, context, callbacks) catch |err| {
+            self.allocator.destroy(i);
+            return err;
+        };
+        errdefer i.deinit();
         try self.registerInstrument(i);
 
         return c;
@@ -273,8 +285,11 @@ pub const Meter = struct {
         callbacks: ?[]AsyncInstrument.ObserveMeasures,
     ) !*AsyncInstrument.ObservableInstrument(.ObservableGauge) {
         var i = try Instrument.new(.ObservableGauge, options, self.allocator);
-        const g = try i.asyncGauge(context, callbacks);
-        errdefer self.allocator.destroy(g);
+        const g = i.asyncGauge(self.io, context, callbacks) catch |err| {
+            self.allocator.destroy(i);
+            return err;
+        };
+        errdefer i.deinit();
         try self.registerInstrument(i);
 
         return g;
@@ -284,8 +299,8 @@ pub const Meter = struct {
     // Name is case-insensitive.
     // The remaining are also forming the identifier.
     fn registerInstrument(self: *Self, instrument: *Instrument) !void {
-        self.mx.lockUncancelable(runtime.io());
-        defer self.mx.unlock(runtime.io());
+        self.mx.lockUncancelable(self.io);
+        defer self.mx.unlock(self.io);
 
         const id = try spec.instrumentIdentifier(
             self.allocator,
@@ -300,6 +315,7 @@ pub const Meter = struct {
                 "Instrument with identifying name {s} already exists in meter {s}",
                 .{ id, self.scope.name },
             );
+            self.allocator.free(id);
             return spec.ResourceError.InstrumentExistsWithSameNameAndIdentifyingFields;
         }
         return self.instruments.put(self.allocator, id, instrument);
@@ -321,14 +337,20 @@ pub const Meter = struct {
 };
 
 test "default meter provider can be fetched" {
-    const mp = try MeterProvider.default();
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     std.debug.assert(@intFromPtr(&mp) != 0);
 }
 
 test "custom meter provider can be created" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     std.debug.assert(@intFromPtr(&mp) != 0);
@@ -339,7 +361,10 @@ test "meter provider with config from environment" {
     defer cfg.deinit();
     Configuration.set(cfg);
 
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     // Verify config was loaded with defaults
@@ -352,7 +377,10 @@ test "meter provider with config from environment" {
 test "meter can be created from custom provider" {
     const meter_name = "my-meter";
     const meter_version = "my-meter";
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{ .name = meter_name, .version = meter_version });
@@ -367,7 +395,10 @@ test "meter can be created from default provider with schema url and attributes"
     const meter_name = "my-meter";
     const meter_version = "my-meter";
 
-    const mp = try MeterProvider.default();
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const val: []const u8 = "value";
@@ -381,7 +412,10 @@ test "meter can be created from default provider with schema url and attributes"
 }
 
 test "meter register instrument twice with same name fails" {
-    const mp = try MeterProvider.default();
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{ .name = "my-meter" });
@@ -394,7 +428,10 @@ test "meter register instrument twice with same name fails" {
 }
 
 test "meter register instrument" {
-    const mp = try MeterProvider.default();
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{ .name = "my-meter" });
@@ -421,19 +458,25 @@ test "meter register instrument" {
 }
 
 test "meter provider adds metric reader" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
-    var mr = MetricReader{ .allocator = std.testing.allocator };
+    var mr = MetricReader{ .allocator = std.testing.allocator, .io = io };
     try mp.addReader(&mr);
 
     std.debug.assert(mp.readers.items.len == 1);
 }
 
 test "meter provider adds multiple metric readers" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
-    var mr1 = MetricReader{ .allocator = std.testing.allocator };
-    var mr2 = MetricReader{ .allocator = std.testing.allocator };
+    var mr1 = MetricReader{ .allocator = std.testing.allocator, .io = io };
+    var mr2 = MetricReader{ .allocator = std.testing.allocator, .io = io };
     try mp.addReader(&mr1);
     try mp.addReader(&mr2);
 
@@ -441,13 +484,16 @@ test "meter provider adds multiple metric readers" {
 }
 
 test "metric reader cannot be registered with multiple providers" {
-    const mp1 = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp1 = try MeterProvider.init(std.testing.allocator, io);
     defer mp1.shutdown();
 
-    const mp2 = try MeterProvider.init(std.testing.allocator);
+    const mp2 = try MeterProvider.init(std.testing.allocator, io);
     defer mp2.shutdown();
 
-    var mr = MetricReader{ .allocator = std.testing.allocator };
+    var mr = MetricReader{ .allocator = std.testing.allocator, .io = io };
 
     try mp1.addReader(&mr);
     const err = mp2.addReader(&mr);
@@ -455,10 +501,13 @@ test "metric reader cannot be registered with multiple providers" {
 }
 
 test "metric reader cannot be registered twice on same meter provider" {
-    const mp1 = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp1 = try MeterProvider.init(std.testing.allocator, io);
     defer mp1.shutdown();
 
-    var mr = MetricReader{ .allocator = std.testing.allocator };
+    var mr = MetricReader{ .allocator = std.testing.allocator, .io = io };
 
     try mp1.addReader(&mr);
     const err = mp1.addReader(&mr);
@@ -466,7 +515,10 @@ test "metric reader cannot be registered twice on same meter provider" {
 }
 
 test "meter provider end to end" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{ .name = "service.company.com" });
@@ -496,7 +548,10 @@ test "meter provider with arena allocator" {
     var arena = std.heap.ArenaAllocator.init(fb.allocator());
     defer arena.deinit();
 
-    const mp = try MeterProvider.init(arena.allocator());
+    var threaded: std.Io.Threaded = .init(arena.allocator(), .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(arena.allocator(), io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{ .name = "service.company.com" });
@@ -572,7 +627,7 @@ pub const AggregatedMetrics = struct {
             }
         }
 
-        const current_time: u64 = @intCast(runtime.nanoTimestamp());
+        const current_time: u64 = @intCast(clock.nanoTimestamp());
 
         // Processing pipeline is split by aggregation type
         const aggregated: ?MeasurementsData = switch (aggregation_type.getType()) {
@@ -650,8 +705,8 @@ pub const AggregatedMetrics = struct {
     /// Caller owns the returned memory and it should be freed using the AggregatedMetrics allocator.
     /// If aggregation_override is provided, it takes precedence over the view system.
     pub fn fetch(allocator: std.mem.Allocator, meter: *Meter, views: []const view.View, aggregation_override: ?view.AggregationSelector) ![]Measurements {
-        meter.mx.lockUncancelable(runtime.io());
-        defer meter.mx.unlock(runtime.io());
+        meter.mx.lockUncancelable(meter.io);
+        defer meter.mx.unlock(meter.io);
 
         var results = std.ArrayList(Measurements).empty;
 
@@ -688,7 +743,10 @@ pub const AggregatedMetrics = struct {
 };
 
 test "aggregated metrics deduplicated from meter without attributes" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     const meter = try mp.getMeter(.{ .name = "test", .schema_url = "http://example.com" });
     var counter = try meter.createCounter(u64, .{ .name = "test-counter" });
@@ -712,7 +770,10 @@ test "aggregated metrics deduplicated from meter without attributes" {
 }
 
 test "aggregated metrics deduplicated from meter with attributes" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meterVal: []const u8 = "meter_val";
@@ -752,7 +813,10 @@ test "aggregated metrics deduplicated from meter with attributes" {
 }
 
 test "aggregated metrics fetch to owned slice" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{ .name = "test", .schema_url = "http://example.com" });
@@ -777,7 +841,10 @@ test "aggregated metrics fetch to owned slice" {
 }
 
 test "aggregated metrics do not duplicate data points" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{ .name = "test", .schema_url = "http://example.com" });
@@ -807,7 +874,10 @@ test "aggregated metrics do not duplicate data points" {
 }
 
 test "aggregated metrics have timestamps" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{ .name = "test", .schema_url = "http://example.com" });
@@ -831,7 +901,10 @@ test "aggregated metrics have timestamps" {
 }
 
 test "aggregated metrics with custom views" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{ .name = "test", .schema_url = "http://example.com" });
@@ -867,7 +940,10 @@ test "aggregated metrics with custom views" {
 }
 
 test "view associated with meter provider" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     // Create a view that matches histograms and uses explicit bucket aggregation
@@ -925,7 +1001,10 @@ test "view associated with meter provider" {
 }
 
 test "view is additive processing with conflicts" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{ .name = "test", .schema_url = "http://example.com" });

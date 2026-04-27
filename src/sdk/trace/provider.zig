@@ -1,5 +1,6 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
+const TestRuntime = @import("../../testing.zig").TestRuntime;
 const context = @import("../../api/context.zig");
 
 // NOTE: API-surface mutex operations use lockUncancelable so that user-facing
@@ -335,7 +336,7 @@ pub const Tracer = struct {
         }
 
         // Set start time if provided, otherwise use current time
-        span.start_time_unix_nano = options.start_timestamp orelse @intCast(runtime.nanoTimestamp());
+        span.start_time_unix_nano = options.start_timestamp orelse @intCast(clock.nanoTimestamp());
 
         // Notify processors that the span has started
         const parent_context = options.parent_context orelse context.Context.init();
@@ -370,13 +371,16 @@ pub const Tracer = struct {
 
 test "TracerProvider basic functionality" {
     const allocator = std.testing.allocator;
+    var rt = TestRuntime.init(allocator);
+    defer rt.deinit();
+    const io = rt.io();
 
     // Create ID generator
     const seed = 0;
     var default_prng = std.Random.DefaultPrng.init(seed);
     const random_generator = RandomIDGenerator.init(default_prng.random());
 
-    var provider = try TracerProvider.init(allocator, runtime.io(), IDGenerator{ .Random = random_generator });
+    var provider = try TracerProvider.init(allocator, io, IDGenerator{ .Random = random_generator });
     defer provider.shutdown(); // Use shutdown to properly destroy the provider
 
     // Get a tracer via the interface
@@ -437,13 +441,16 @@ const MockProcessor = struct {
 };
 test "TracerProvider with processors" {
     const allocator = std.testing.allocator;
+    var rt = TestRuntime.init(allocator);
+    defer rt.deinit();
+    const io = rt.io();
 
     // Create ID generator
     const seed = 0;
     var default_prng = std.Random.DefaultPrng.init(seed);
     const random_generator = RandomIDGenerator.init(default_prng.random());
 
-    var provider = try TracerProvider.init(allocator, runtime.io(), IDGenerator{ .Random = random_generator });
+    var provider = try TracerProvider.init(allocator, io, IDGenerator{ .Random = random_generator });
     defer provider.shutdown(); // Use shutdown to properly destroy the provider
 
     // Add a mock processor
@@ -464,6 +471,9 @@ test "TracerProvider with processors" {
 
 test "TracerProvider with config from environment" {
     const allocator = std.testing.allocator;
+    var rt = TestRuntime.init(allocator);
+    defer rt.deinit();
+    const io = rt.io();
 
     const cfg = try Configuration.initFromEnv(allocator);
     defer cfg.deinit();
@@ -474,7 +484,7 @@ test "TracerProvider with config from environment" {
     var default_prng = std.Random.DefaultPrng.init(seed);
     const random_generator = RandomIDGenerator.init(default_prng.random());
 
-    var provider = try TracerProvider.init(allocator, runtime.io(), IDGenerator{ .Random = random_generator });
+    var provider = try TracerProvider.init(allocator, io, IDGenerator{ .Random = random_generator });
     defer provider.shutdown();
 
     // Verify config was loaded with defaults
@@ -486,12 +496,15 @@ test "TracerProvider with config from environment" {
 
 test "TracerProvider end span with links and events" {
     const allocator = std.testing.allocator;
+    var rt = TestRuntime.init(allocator);
+    defer rt.deinit();
+    const io = rt.io();
 
     const seed = 0;
     var default_prng = std.Random.DefaultPrng.init(seed);
     const random_generator = RandomIDGenerator.init(default_prng.random());
 
-    var provider = try TracerProvider.init(allocator, runtime.io(), IDGenerator{ .Random = random_generator });
+    var provider = try TracerProvider.init(allocator, io, IDGenerator{ .Random = random_generator });
     defer provider.shutdown(); // Use shutdown to properly destroy the provider
 
     // Get a tracer via the interface

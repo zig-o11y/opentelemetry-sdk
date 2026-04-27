@@ -127,14 +127,17 @@ pub const FileExporter = struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
         if (self.owns_file) {
             self.file.close(self.io);
+            self.owns_file = false;
         }
     }
 };
 
 test "FileExporter init and deinit" {
-    const runtime = @import("runtime");
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    var file_exporter = try FileExporter.init(allocator, runtime.io(), Resource.empty(), .{});
+    var file_exporter = try FileExporter.init(allocator, io, Resource.empty(), .{});
     defer file_exporter.deinit();
 }

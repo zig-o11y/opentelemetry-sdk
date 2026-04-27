@@ -7,7 +7,8 @@
 //! Currently, only HTTP transport is implemented, because gRPC is not yet supported in Zig's ecosystem.
 
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
+const env = @import("env");
 const http = std.http;
 const Uri = std.Uri;
 const flate = std.compress.flate;
@@ -246,8 +247,8 @@ pub const ConfigOptions = struct {
     /// Retrieves the configuration from the environment variables.
     /// The environment variables are prefixed with "OTEL_EXPORTER_OTLP_",
     /// and they take precedence over the values set in the config.
-    /// Pass the "environ" argument with runtime.createEnvMap().
-    pub fn mergeFromEnvMap(self: *ConfigOptions, environ: *const runtime.EnvMap) !void {
+    /// Pass the "environ" argument with env.createEnvMap().
+    pub fn mergeFromEnvMap(self: *ConfigOptions, environ: *const env.EnvMap) !void {
         // customize endpoint and URLs
         // Strings from the EnvMap are borrowed — dupe them so they outlive the EnvMap.
         if (entryFromEnvMap(environ, "ENDPOINT")) |endpoint| {
@@ -297,7 +298,7 @@ pub const ConfigOptions = struct {
         self.endpoint_owned = true;
     }
 
-    fn entryFromEnvMap(environ: *const runtime.EnvMap, varSuffix: []const u8) ?[]const u8 {
+    fn entryFromEnvMap(environ: *const env.EnvMap, varSuffix: []const u8) ?[]const u8 {
         var env_var_name: [128]u8 = [_]u8{0} ** 128;
         for (env_var_prefix, 0..) |c, i| {
             env_var_name[i] = c;
@@ -329,7 +330,7 @@ pub const ConfigOptions = struct {
 
 test "otlp config from env" {
     const allocator = std.testing.allocator;
-    var map = runtime.EnvMap.init(allocator);
+    var map = env.EnvMap.init(allocator);
     defer map.deinit();
     // Set the environment variable to test.
     const new_endpoint: []const u8 = "something:1234";
@@ -398,7 +399,7 @@ test "otlp config from env with URL scheme in endpoint" {
     };
 
     for (cases) |c| {
-        var map = runtime.EnvMap.init(allocator);
+        var map = env.EnvMap.init(allocator);
         defer map.deinit();
         try map.put("OTEL_EXPORTER_OTLP_ENDPOINT", c.env);
 
@@ -416,7 +417,7 @@ test "otlp config from env with URL scheme in endpoint" {
 
     // Scheme-only input has no host and must be rejected.
     {
-        var map = runtime.EnvMap.init(allocator);
+        var map = env.EnvMap.init(allocator);
         defer map.deinit();
         try map.put("OTEL_EXPORTER_OTLP_ENDPOINT", "http://");
 
@@ -438,7 +439,7 @@ test "otlp config custom endpoint for singals" {
     try std.testing.expectEqualStrings("http://localhost:4317/v1/traces", traces);
     // Assert that some signals' HTTP path can be overridden from env.
 
-    var map = runtime.EnvMap.init(allocator);
+    var map = env.EnvMap.init(allocator);
     defer map.deinit();
     try map.put("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "https://another.com:1234/traces");
     try map.put("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "http://metrics-new:1234");
@@ -517,7 +518,7 @@ const HTTPClient = struct {
     // Default HTTP Client
     client: http.Client,
 
-    pub fn init(allocator: std.mem.Allocator, config: *ConfigOptions) !*Self {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, config: *ConfigOptions) !*Self {
         try config.validate();
 
         const s = try allocator.create(Self);
@@ -525,7 +526,7 @@ const HTTPClient = struct {
         s.* = Self{
             .allocator = allocator,
             .config = config,
-            .client = http.Client{ .allocator = allocator, .io = runtime.io() },
+            .client = http.Client{ .allocator = allocator, .io = io },
         };
 
         return s;
@@ -621,6 +622,7 @@ const HTTPClient = struct {
                 const cloned_req = try cloneFetchOptions(retry_allocator, fetch_request);
                 const t = try std.Thread.spawn(.{}, retryRequest, .{
                     retry_allocator,
+                    self.client.io,
                     self.config.retryConfig,
                     cloned_req,
                 });
@@ -637,14 +639,14 @@ const HTTPClient = struct {
         }
     }
 
-    fn retryRequest(allocator: std.mem.Allocator, retry_config: ExpBackoffconfig, req_opts: http.Client.FetchOptions) void {
+    fn retryRequest(allocator: std.mem.Allocator, io: std.Io, retry_config: ExpBackoffconfig, req_opts: http.Client.FetchOptions) void {
         defer freeFetchOptions(allocator, req_opts);
 
         var retry_count: u32 = 0;
         while (retry_count < retry_config.max_retries) {
             defer retry_count += 1;
 
-            var client = http.Client{ .allocator = allocator, .io = runtime.io() };
+            var client = http.Client{ .allocator = allocator, .io = io };
             const response = client.fetch(req_opts) catch |err| {
                 client.deinit();
                 log.err("transport (retry): error connecting to server: {}", .{err});
@@ -660,7 +662,7 @@ const HTTPClient = struct {
                     // This retry runs in a dedicated OS thread (see retryRequest spawn above).
                     // For Io.Evented users, the spawned thread still blocks the OS thread,
                     // which is less efficient than an evented delay but correct.
-                    runtime.sleep(std.time.ns_per_ms * calculateDelayMillisec(
+                    clock.sleep(std.time.ns_per_ms * calculateDelayMillisec(
                         retry_config.base_delay_ms,
                         retry_config.max_delay_ms,
                         retry_count,
@@ -701,7 +703,7 @@ fn calculateDelayMillisec(base_delay_ms: u64, max_delay_ms: u64, attempt: u32) u
         max_delay_ms,
         base_delay_ms * std.math.pow(u64, 2, attempt),
     );
-    var prng = std.Random.DefaultPrng.init(@intCast(runtime.timestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(clock.timestamp()));
     const jitter = prng.random().intRangeAtMost(u64, 0, @intCast(@divTrunc(delay, 10)));
     return delay + jitter;
 }
@@ -823,10 +825,13 @@ test "otlp exp backoff delay calculation" {
 // and there is no memory leak.
 test "otlp HTTPClient send fails for missing server" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
     var config = try ConfigOptions.init(allocator);
     defer config.deinit();
 
-    const client = try HTTPClient.init(allocator, config);
+    const client = try HTTPClient.init(allocator, io, config);
     defer client.deinit();
 
     const url = try config.httpUrlForSignal(.metrics, allocator);
@@ -840,13 +845,14 @@ test "otlp HTTPClient send fails for missing server" {
 /// Export the data to the OTLP endpoint using the options configured with ConfigOptions.
 pub fn Export(
     allocator: std.mem.Allocator,
+    io: std.Io,
     config: *ConfigOptions,
     otlp_payload: Signal.Data,
 ) !void {
     // FIXME better polymorphism here.
     // Determine the type of client to be used, currently only HTTP is supported.
     const client = switch (config.protocol) {
-        .http_json, .http_protobuf => try HTTPClient.init(allocator, config),
+        .http_json, .http_protobuf => try HTTPClient.init(allocator, io, config),
         .grpc => return ExportError.UnimplementedTransportProtocol,
     };
     // the `deinit()` method MUST be implemented by all clients.

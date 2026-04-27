@@ -1,5 +1,5 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
 const sdk = @import("opentelemetry-sdk");
 const metrics = sdk.metrics;
 const MeterProvider = metrics.MeterProvider;
@@ -10,7 +10,7 @@ threadlocal var thread_rng: ?std.Random.DefaultPrng = null;
 
 fn getThreadRng() *std.Random.DefaultPrng {
     if (thread_rng == null) {
-        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(runtime.timestamp())));
+        thread_rng = std.Random.DefaultPrng.init(@as(u64, @intCast(clock.nanoTimestamp())));
     }
     return &thread_rng.?;
 }
@@ -22,8 +22,8 @@ const bench_config = benchmark.Config{
     .track_allocations = false,
 };
 
-fn setupSDK(allocator: std.mem.Allocator) !*metrics.MeterProvider {
-    const mp = try MeterProvider.init(allocator);
+fn setupSDK(allocator: std.mem.Allocator, io: std.Io) !*metrics.MeterProvider {
+    const mp = try MeterProvider.init(allocator, io);
     errdefer mp.shutdown();
     return mp;
 }
@@ -71,7 +71,11 @@ const RandomIndicesPool = struct {
 };
 
 test "Counter_Add_W/O_Attributes" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{
@@ -96,13 +100,16 @@ test "Counter_Add_W/O_Attributes" {
 
     try bench.addParam("Counter_Add_Without_Attributes", &without_attributes, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Counter_Add_Sorted" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{
@@ -141,13 +148,16 @@ test "Counter_Add_Sorted" {
 
     try bench.addParam("Counter_Add_Sorted", &sorted_bench, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Counter_Add_Unsorted" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{
@@ -186,13 +196,16 @@ test "Counter_Add_Unsorted" {
 
     try bench.addParam("Counter_Add_Unsorted", &unsorted_bench, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Counter_Add_Non_Static_Values" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{
@@ -246,13 +259,16 @@ test "Counter_Add_Non_Static_Values" {
 
     try bench.addParam("Counter_Add_Non_Static_Values", &dynamic_bench, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Counter_Overflow" {
-    const mp = try MeterProvider.init(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
     const meter = try mp.getMeter(.{
@@ -294,13 +310,16 @@ test "Counter_Overflow" {
 
     try bench.addParam("Counter_Overflow", &overflow_bench, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Counter_Concurrent" {
-    const mp = try setupSDK(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const mp = try setupSDK(std.testing.allocator, io);
     defer mp.shutdown();
     const meter = try mp.getMeter(.{
         .name = "test.company.org/benchmark-concurrent",
@@ -318,7 +337,6 @@ test "Counter_Concurrent" {
     const concurrent_bench = ConcurrentCounterBench{ .counter = counter };
     try bench.addParam("Counter_Concurrent", &concurrent_bench, .{ .track_allocations = false });
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }

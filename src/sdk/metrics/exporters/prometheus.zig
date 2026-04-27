@@ -6,7 +6,7 @@
 //! See: https://opentelemetry.io/docs/specs/otel/metrics/sdk_exporters/prometheus/
 
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
 const Allocator = std.mem.Allocator;
 
 const Measurements = @import("../../../api/metrics/measurement.zig").Measurements;
@@ -452,6 +452,7 @@ pub const PrometheusExporter = struct {
     const Self = @This();
 
     allocator: Allocator,
+    io: std.Io,
     config: ExporterConfig,
     formatter: PrometheusFormatter,
     server_thread: ?std.Thread = null,
@@ -465,12 +466,13 @@ pub const PrometheusExporter = struct {
     // Implement the ExporterImpl interface
     exporter: ExporterImpl,
 
-    pub fn init(allocator: Allocator, config: ExporterConfig) !*Self {
+    pub fn init(allocator: Allocator, io: std.Io, config: ExporterConfig) !*Self {
         const self = try allocator.create(Self);
         errdefer allocator.destroy(self);
 
         self.* = Self{
             .allocator = allocator,
+            .io = io,
             .config = config,
             .formatter = PrometheusFormatter.init(allocator, config.formatter_config),
             .should_stop = std.atomic.Value(bool).init(false),
@@ -493,8 +495,8 @@ pub const PrometheusExporter = struct {
     /// aggregator has been shut down.
     fn exportBatch(iface: *ExporterImpl, measurements: []Measurements) MetricReadError!void {
         const self: *Self = @fieldParentPtr("exporter", iface);
-        self.mutex.lockUncancelable(runtime.io());
-        defer self.mutex.unlock(runtime.io());
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         // Store this measurements array for cleanup during shutdown
         self.all_measurements.append(measurements) catch {
@@ -541,7 +543,7 @@ pub const PrometheusExporter = struct {
                 self.should_stop.store(false, .release);
                 return;
             };
-            const wake_stream = address.connect(runtime.io(), .{ .mode = .stream }) catch {
+            const wake_stream = address.connect(self.io, .{ .mode = .stream }) catch {
                 // Connection failed, but thread might have already exited
                 thread.join();
                 self.server_thread = null;
@@ -550,7 +552,7 @@ pub const PrometheusExporter = struct {
             };
 
             thread.join();
-            wake_stream.close(runtime.io());
+            wake_stream.close(self.io);
             self.server_thread = null;
             // Reset flag so server can be restarted
             self.should_stop.store(false, .release);
@@ -565,16 +567,16 @@ pub const PrometheusExporter = struct {
 
     fn serverLoopImpl(self: *Self) !void {
         const address = try std.Io.net.IpAddress.parse(self.config.host, self.config.port);
-        var listener = try address.listen(runtime.io(), .{
+        var listener = try address.listen(self.io, .{
             .reuse_address = true,
         });
-        defer listener.deinit(runtime.io());
+        defer listener.deinit(self.io);
 
         std.log.info("Prometheus exporter listening on {s}:{d}", .{ self.config.host, self.config.port });
 
         while (!self.should_stop.load(.acquire)) {
             // Accept connection (will block until we get one or server stops)
-            var stream = listener.accept(runtime.io()) catch |err| {
+            var stream = listener.accept(self.io) catch |err| {
                 // If we get an error and should_stop is true, exit gracefully
                 if (self.should_stop.load(.acquire)) {
                     return;
@@ -584,7 +586,7 @@ pub const PrometheusExporter = struct {
 
             // Check if we should stop before handling the connection
             if (self.should_stop.load(.acquire)) {
-                stream.close(runtime.io());
+                stream.close(self.io);
                 return;
             }
 
@@ -592,13 +594,13 @@ pub const PrometheusExporter = struct {
             self.handleConnection(stream) catch |err| {
                 std.log.err("Error handling connection: {}", .{err});
             };
-            stream.close(runtime.io());
+            stream.close(self.io);
         }
     }
 
     fn handleConnection(self: *Self, stream: std.Io.net.Stream) !void {
         var read_buffer: [4096]u8 = undefined;
-        var reader = stream.reader(runtime.io(), &read_buffer);
+        var reader = stream.reader(self.io, &read_buffer);
         const request_line = (try reader.interface.takeDelimiter('\n')) orelse return;
         const request = if (request_line.len > 0 and request_line[request_line.len - 1] == '\r')
             request_line[0 .. request_line.len - 1]
@@ -617,8 +619,8 @@ pub const PrometheusExporter = struct {
 
     fn handleMetricsRequest(self: *Self, stream: std.Io.net.Stream) !void {
         // Serve cached metrics from the last exportBatch call (thread-safe)
-        self.mutex.lockUncancelable(runtime.io());
-        defer self.mutex.unlock(runtime.io());
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         // Format metrics to Prometheus text format
         var output = std.ArrayListUnmanaged(u8).empty;
@@ -636,13 +638,13 @@ pub const PrometheusExporter = struct {
             "\r\n";
 
         var write_buffer: [4096]u8 = undefined;
-        var stream_writer = stream.writer(runtime.io(), &write_buffer);
+        var stream_writer = stream.writer(self.io, &write_buffer);
         try stream_writer.interface.writeAll(headers);
         try stream_writer.interface.writeAll(writer_alloc.writer.buffer[0..writer_alloc.writer.end]);
         try stream_writer.interface.flush();
     }
 
-    fn handleNotFound(_: *Self, stream: std.Io.net.Stream) !void {
+    fn handleNotFound(self: *Self, stream: std.Io.net.Stream) !void {
         const response =
             "HTTP/1.1 404 Not Found\r\n" ++
             "Content-Type: text/plain\r\n" ++
@@ -651,12 +653,12 @@ pub const PrometheusExporter = struct {
             "404 Not Found\n" ++
             "Only /metrics endpoint is available\n";
         var write_buffer: [1024]u8 = undefined;
-        var writer = stream.writer(runtime.io(), &write_buffer);
+        var writer = stream.writer(self.io, &write_buffer);
         try writer.interface.writeAll(response);
         try writer.interface.flush();
     }
 
-    fn handleBadRequest(_: *Self, stream: std.Io.net.Stream) !void {
+    fn handleBadRequest(self: *Self, stream: std.Io.net.Stream) !void {
         const response =
             "HTTP/1.1 400 Bad Request\r\n" ++
             "Content-Type: text/plain\r\n" ++
@@ -664,7 +666,7 @@ pub const PrometheusExporter = struct {
             "\r\n" ++
             "400 Bad Request\n";
         var write_buffer: [1024]u8 = undefined;
-        var writer = stream.writer(runtime.io(), &write_buffer);
+        var writer = stream.writer(self.io, &write_buffer);
         try writer.interface.writeAll(response);
         try writer.interface.flush();
     }
@@ -887,8 +889,11 @@ test "PrometheusExporter: server start and stop" {
     // TODO: Switch to port 0 + discovery to eliminate flakes under parallel tests.
     // This requires exposing the bound port from the Server socket.
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const exporter = try PrometheusExporter.init(allocator, .{
+    const exporter = try PrometheusExporter.init(allocator, io, .{
         .host = "127.0.0.1",
         .port = 29465, // Use unique port for test
     });
@@ -902,7 +907,7 @@ test "PrometheusExporter: server start and stop" {
     try std.testing.expect(exporter.server_thread != null);
 
     // Wait a bit for server to be ready
-    runtime.sleep(100 * std.time.ns_per_ms);
+    clock.sleep(100 * std.time.ns_per_ms);
 
     // Stop the server (should not block)
     exporter.stop();
@@ -911,8 +916,11 @@ test "PrometheusExporter: server start and stop" {
 
 test "PrometheusExporter: double start returns error" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const exporter = try PrometheusExporter.init(allocator, .{
+    const exporter = try PrometheusExporter.init(allocator, io, .{
         .host = "127.0.0.1",
         .port = 29466, // Use unique port for test
     });
@@ -928,8 +936,11 @@ test "PrometheusExporter: double start returns error" {
 
 test "PrometheusExporter: repeated start/stop cycles" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const exporter = try PrometheusExporter.init(allocator, .{
+    const exporter = try PrometheusExporter.init(allocator, io, .{
         .host = "127.0.0.1",
         .port = 29467, // Use unique port for test
     });
@@ -939,9 +950,9 @@ test "PrometheusExporter: repeated start/stop cycles" {
     var i: usize = 0;
     while (i < 3) : (i += 1) {
         try exporter.start();
-        runtime.sleep(50 * std.time.ns_per_ms);
+        clock.sleep(50 * std.time.ns_per_ms);
         exporter.stop();
-        runtime.sleep(50 * std.time.ns_per_ms);
+        clock.sleep(50 * std.time.ns_per_ms);
     }
 
     // Verify server is stopped
@@ -950,8 +961,11 @@ test "PrometheusExporter: repeated start/stop cycles" {
 
 test "PrometheusExporter: concurrent HTTP requests" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const exporter = try PrometheusExporter.init(allocator, .{
+    const exporter = try PrometheusExporter.init(allocator, io, .{
         .host = "127.0.0.1",
         .port = 29468, // Use unique port for test
     });
@@ -961,31 +975,31 @@ test "PrometheusExporter: concurrent HTTP requests" {
     defer exporter.stop();
 
     // Wait for server to be ready
-    runtime.sleep(100 * std.time.ns_per_ms);
+    clock.sleep(100 * std.time.ns_per_ms);
 
     // Make multiple concurrent requests
     const RequestThread = struct {
-        fn makeRequest(port: u16) void {
+        fn makeRequest(port: u16, io_inst: std.Io) void {
             const address = std.Io.net.IpAddress.parse("127.0.0.1", port) catch return;
-            const stream = address.connect(runtime.io(), .{ .mode = .stream }) catch return;
-            defer stream.close(runtime.io());
+            const stream = address.connect(io_inst, .{ .mode = .stream }) catch return;
+            defer stream.close(io_inst);
 
             const request = "GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
             var write_buffer: [1024]u8 = undefined;
-            var writer = stream.writer(runtime.io(), &write_buffer);
+            var writer = stream.writer(io_inst, &write_buffer);
             writer.interface.writeAll(request) catch return;
             writer.interface.flush() catch return;
 
             var read_buffer: [1024]u8 = undefined;
             var response_buffer: [4096]u8 = undefined;
-            var reader = stream.reader(runtime.io(), &read_buffer);
+            var reader = stream.reader(io_inst, &read_buffer);
             _ = reader.interface.readSliceShort(&response_buffer) catch return;
         }
     };
 
     var threads: [3]std.Thread = undefined;
     for (&threads) |*thread| {
-        thread.* = try std.Thread.spawn(.{}, RequestThread.makeRequest, .{29468});
+        thread.* = try std.Thread.spawn(.{}, RequestThread.makeRequest, .{ 29468, io });
     }
 
     // Wait for all threads to complete
@@ -999,20 +1013,23 @@ test "PrometheusExporter: concurrent HTTP requests" {
 
 test "PrometheusExporter: shutdown does not block" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const exporter = try PrometheusExporter.init(allocator, .{
+    const exporter = try PrometheusExporter.init(allocator, io, .{
         .host = "127.0.0.1",
         .port = 29469, // Use unique port for test
     });
     defer exporter.deinit();
 
     try exporter.start();
-    runtime.sleep(100 * std.time.ns_per_ms);
+    clock.sleep(100 * std.time.ns_per_ms);
 
     // Measure shutdown time (should be fast, not blocked)
-    const start_time = runtime.milliTimestamp();
+    const start_time = clock.milliTimestamp();
     exporter.stop();
-    const end_time = runtime.milliTimestamp();
+    const end_time = clock.milliTimestamp();
 
     const shutdown_time = end_time - start_time;
     // Shutdown should complete within 1 second (generous timeout)
@@ -1021,8 +1038,11 @@ test "PrometheusExporter: shutdown does not block" {
 
 test "PrometheusExporter: server handles invalid path with 404" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const exporter = try PrometheusExporter.init(allocator, .{
+    const exporter = try PrometheusExporter.init(allocator, io, .{
         .host = "127.0.0.1",
         .port = 29470, // Use unique port for test
     });
@@ -1031,22 +1051,22 @@ test "PrometheusExporter: server handles invalid path with 404" {
     try exporter.start();
     defer exporter.stop();
 
-    runtime.sleep(100 * std.time.ns_per_ms);
+    clock.sleep(100 * std.time.ns_per_ms);
 
     // Make request to invalid path
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 29470);
-    const stream = try address.connect(runtime.io(), .{ .mode = .stream });
-    defer stream.close(runtime.io());
+    const stream = try address.connect(io, .{ .mode = .stream });
+    defer stream.close(io);
 
     const request = "GET /invalid HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
     var write_buffer: [1024]u8 = undefined;
-    var writer = stream.writer(runtime.io(), &write_buffer);
+    var writer = stream.writer(io, &write_buffer);
     try writer.interface.writeAll(request);
     try writer.interface.flush();
 
     var read_buffer: [1024]u8 = undefined;
     var response_buffer: [1024]u8 = undefined;
-    var reader = stream.reader(runtime.io(), &read_buffer);
+    var reader = stream.reader(io, &read_buffer);
     const n = try reader.interface.readSliceShort(&response_buffer);
     const response = response_buffer[0..n];
 
@@ -1056,12 +1076,15 @@ test "PrometheusExporter: server handles invalid path with 404" {
 
 test "PrometheusExporter e2e" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
-    const mp = try MeterProvider.init(allocator);
+    const mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();
 
     // Create Prometheus exporter using factory function
-    const result = try MetricExporter.Prometheus(allocator, .{
+    const result = try MetricExporter.Prometheus(allocator, io, .{
         .host = "127.0.0.1",
         .port = 29471, // Unique port for this test
         .formatter_config = .{
@@ -1072,7 +1095,7 @@ test "PrometheusExporter e2e" {
     defer result.exporter.shutdown();
     defer result.prometheus.deinit();
 
-    const reader = try MetricReader.init(allocator, result.exporter);
+    const reader = try MetricReader.init(allocator, io, result.exporter);
     defer reader.shutdown();
     try mp.addReader(reader);
 
@@ -1108,29 +1131,29 @@ test "PrometheusExporter e2e" {
     defer result.prometheus.stop();
 
     // Wait for server to be ready
-    runtime.sleep(100 * std.time.ns_per_ms);
+    clock.sleep(100 * std.time.ns_per_ms);
 
     try reader.collect();
 
     // Verify we have cached measurements
-    result.prometheus.mutex.lockUncancelable(runtime.io());
+    result.prometheus.mutex.lockUncancelable(io);
     const cached_count = result.prometheus.last_measurements.len;
-    result.prometheus.mutex.unlock(runtime.io());
+    result.prometheus.mutex.unlock(io);
     try std.testing.expect(cached_count > 0);
 
     const address = try std.Io.net.IpAddress.parse("127.0.0.1", 29471);
-    const stream = try address.connect(runtime.io(), .{ .mode = .stream });
-    defer stream.close(runtime.io());
+    const stream = try address.connect(io, .{ .mode = .stream });
+    defer stream.close(io);
 
     const request = "GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
     var write_buffer: [1024]u8 = undefined;
-    var writer = stream.writer(runtime.io(), &write_buffer);
+    var writer = stream.writer(io, &write_buffer);
     try writer.interface.writeAll(request);
     try writer.interface.flush();
 
     // Read response to ensure it works
     var read_buffer: [1024]u8 = undefined;
-    var response_reader = stream.reader(runtime.io(), &read_buffer);
+    var response_reader = stream.reader(io, &read_buffer);
     var buf: [4096]u8 = undefined;
     var total_read: usize = 0;
     while (true) {

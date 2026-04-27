@@ -1,5 +1,5 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
 const sdk = @import("opentelemetry-sdk");
 const metrics = sdk.metrics;
 const MeterProvider = metrics.MeterProvider;
@@ -13,14 +13,17 @@ const bench_config = benchmark.Config{
 };
 
 // Helper function to create meter provider and meter
-fn setupMeter(allocator: std.mem.Allocator) !*MeterProvider {
-    const provider = try MeterProvider.init(allocator);
+fn setupMeter(allocator: std.mem.Allocator, io: std.Io) !*MeterProvider {
+    const provider = try MeterProvider.init(allocator, io);
     return provider;
 }
 
 // Counter benchmarks with varying attribute counts
 test "AddNoAttrs" {
-    const provider = try setupMeter(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const provider = try setupMeter(std.testing.allocator, io);
     defer provider.shutdown();
     const meter = try provider.getMeter(.{
         .name = "benchmark.general",
@@ -43,13 +46,15 @@ test "AddNoAttrs" {
 
     try bench.addParam("AddNoAttrs", &no_attrs, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "AddOneAttr" {
-    const provider = try setupMeter(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const provider = try setupMeter(std.testing.allocator, io);
     defer provider.shutdown();
     const meter = try provider.getMeter(.{
         .name = "benchmark.general",
@@ -75,13 +80,15 @@ test "AddOneAttr" {
 
     try bench.addParam("AddOneAttr", &one_attr, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "AddThreeAttr" {
-    const provider = try setupMeter(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const provider = try setupMeter(std.testing.allocator, io);
     defer provider.shutdown();
     const meter = try provider.getMeter(.{
         .name = "benchmark.general",
@@ -111,13 +118,15 @@ test "AddThreeAttr" {
 
     try bench.addParam("AddThreeAttr", &three_attr, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "AddFiveAttr" {
-    const provider = try setupMeter(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const provider = try setupMeter(std.testing.allocator, io);
     defer provider.shutdown();
     const meter = try provider.getMeter(.{
         .name = "benchmark.general",
@@ -151,13 +160,15 @@ test "AddFiveAttr" {
 
     try bench.addParam("AddFiveAttr", &five_attr, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "AddTenAttr" {
-    const provider = try setupMeter(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const provider = try setupMeter(std.testing.allocator, io);
     defer provider.shutdown();
     const meter = try provider.getMeter(.{
         .name = "benchmark.general",
@@ -201,14 +212,16 @@ test "AddTenAttr" {
 
     try bench.addParam("AddTenAttr", &ten_attr, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 // Histogram benchmarks with varying bucket counts
 test "RecordHistogram10Bounds" {
-    const provider = try setupMeter(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const provider = try setupMeter(std.testing.allocator, io);
     defer provider.shutdown();
 
     // Add a view with custom explicit buckets for the histogram
@@ -248,13 +261,15 @@ test "RecordHistogram10Bounds" {
 
     try bench.addParam("RecordHistogram10Bounds", &hist_bench, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "RecordHistogram50Bounds" {
-    const provider = try setupMeter(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const provider = try setupMeter(std.testing.allocator, io);
     defer provider.shutdown();
 
     // Create 50 bucket boundaries
@@ -300,14 +315,16 @@ test "RecordHistogram50Bounds" {
 
     try bench.addParam("RecordHistogram50Bounds", &hist_bench, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 // Benchmark for single-use attributes
 test "AddSingleUseAttrs" {
-    const provider = try setupMeter(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const provider = try setupMeter(std.testing.allocator, io);
     defer provider.shutdown();
     const meter = try provider.getMeter(.{
         .name = "benchmark.general",
@@ -326,7 +343,7 @@ test "AddSingleUseAttrs" {
 
         pub fn run(self: *@This(), _: std.mem.Allocator) void {
             // Use timestamp to create unique attribute value for each iteration
-            const ts = runtime.timestamp();
+            const ts = clock.timestamp();
 
             // Create unique attribute value for each iteration
             var buf: [32]u8 = undefined;
@@ -340,14 +357,16 @@ test "AddSingleUseAttrs" {
 
     try bench.addParam("AddSingleUseAttrs", &single_use, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 // Gauge benchmark with varying values
 test "GaugeRecordVaried" {
-    const provider = try setupMeter(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const provider = try setupMeter(std.testing.allocator, io);
     defer provider.shutdown();
     const meter = try provider.getMeter(.{
         .name = "benchmark.general",
@@ -366,7 +385,7 @@ test "GaugeRecordVaried" {
 
         pub fn run(self: *@This(), _: std.mem.Allocator) void {
             // Simulate CPU usage between 0% and 100%
-            var rng = std.Random.DefaultPrng.init(@as(u64, @intCast(runtime.timestamp())));
+            var rng = std.Random.DefaultPrng.init(@as(u64, @intCast(clock.timestamp())));
             const value = rng.random().float(f64) * 100.0;
 
             const cpu: []const u8 = "cpu0";
@@ -380,7 +399,6 @@ test "GaugeRecordVaried" {
 
     try bench.addParam("GaugeRecordVaried", &gauge_varied, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }

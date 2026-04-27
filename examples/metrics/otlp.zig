@@ -1,5 +1,4 @@
 const std = @import("std");
-const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 const metrics_sdk = sdk.metrics;
 const MeterProvider = metrics_sdk.MeterProvider;
@@ -12,6 +11,9 @@ pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
     defer if (gpa.deinit() == .leak) @panic("leaks detected");
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
     // number of data points we expect to send
     const how_many = 10;
@@ -22,7 +24,7 @@ pub fn main() !void {
             std.debug.assert(req.resource_metrics.items[0].scope_metrics.items[0].metrics.items[0].data.?.sum.data_points.items.len == how_many);
         }
     };
-    var server = try otlp_stub.MetricsStubServer.init(allocator, 4317, OnExport.handler);
+    var server = try otlp_stub.MetricsStubServer.init(allocator, io, 4317, OnExport.handler);
     defer server.deinit();
 
     // Start the server in a background thread
@@ -40,7 +42,7 @@ pub fn main() !void {
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
-    var otel = try setupTelemetry(allocator, config);
+    var otel = try setupTelemetry(allocator, io, config);
     defer otel.otlp_exporter.deinit();
     defer otel.metric_reader.shutdown();
 
@@ -62,14 +64,14 @@ const OTel = struct {
     otlp_exporter: *metrics_sdk.OTLPExporter,
 };
 
-fn setupTelemetry(allocator: std.mem.Allocator, opts: *otlp.ConfigOptions) !OTel {
-    const mp = try metrics_sdk.MeterProvider.default();
+fn setupTelemetry(allocator: std.mem.Allocator, io: std.Io, opts: *otlp.ConfigOptions) !OTel {
+    const mp = try metrics_sdk.MeterProvider.init(allocator, io);
     errdefer mp.shutdown();
 
-    const me = try metrics_sdk.MetricExporter.OTLP(allocator, null, null, opts);
+    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, null, null, opts);
     errdefer me.otlp.deinit();
 
-    const mr = try metrics_sdk.MetricReader.init(allocator, me.exporter);
+    const mr = try metrics_sdk.MetricReader.init(allocator, io, me.exporter);
     try mp.addReader(mr);
 
     return .{

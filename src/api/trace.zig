@@ -1,11 +1,4 @@
 const std = @import("std");
-const runtime = @import("runtime");
-
-// NOTE: API-surface mutex operations use lockUncancelable so that user-facing
-// methods do not introduce cancellation points. This is safe with Io.Threaded
-// (the default) but means user cancellations will be ignored if the SDK is
-// used with Io.Evented. Switching to lock() would require propagating
-// error{Canceled} through all public APIs.
 
 const context = @import("context.zig");
 const attribute = @import("../attributes.zig");
@@ -228,23 +221,19 @@ pub fn deserializeSpanContext(ctx: context.Context) ?SpanContext {
     return result;
 }
 
-// Global TracerProvider management
-var global_tracer_provider: ?*TracerProvider = null;
-var global_tracer_provider_mutex: std.Io.Mutex = .init;
+// Global TracerProvider management — stored atomically since it is a
+// single-pointer write-once-then-read pattern, no mutex needed.
+var global_tracer_provider: std.atomic.Value(?*TracerProvider) = .init(null);
 
 /// Set the global TracerProvider
 pub fn setGlobalTracerProvider(provider: *TracerProvider) void {
-    global_tracer_provider_mutex.lockUncancelable(runtime.io());
-    defer global_tracer_provider_mutex.unlock(runtime.io());
-    global_tracer_provider = provider;
+    global_tracer_provider.store(provider, .release);
 }
 
 /// Get the global TracerProvider. Returns null if none has been set.
 /// Applications should use a proper TracerProvider implementation.
 pub fn getGlobalTracerProvider() ?*TracerProvider {
-    global_tracer_provider_mutex.lockUncancelable(runtime.io());
-    defer global_tracer_provider_mutex.unlock(runtime.io());
-    return global_tracer_provider;
+    return global_tracer_provider.load(.acquire);
 }
 
 // Context keys for span propagation

@@ -1,5 +1,5 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
 const sdk = @import("opentelemetry-sdk");
 const metrics_sdk = sdk.metrics;
 const MeterProvider = metrics_sdk.MeterProvider;
@@ -10,13 +10,16 @@ pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
     // Create the meter provider
-    const mp = try MeterProvider.init(allocator);
+    const mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();
 
     // Create Prometheus exporter using factory function
-    const result = try MetricExporter.Prometheus(allocator, .{
+    const result = try MetricExporter.Prometheus(allocator, io, .{
         .host = "127.0.0.1",
         .port = 9464,
     });
@@ -30,9 +33,7 @@ pub fn main() !void {
     defer result.prometheus.stop();
 
     // Create a periodic reader that collects metrics every 5 seconds
-    const periodic_reader = try PeriodicExportingReader.init(
-        allocator,
-        mp,
+    const periodic_reader = try PeriodicExportingReader.init(allocator, io, mp,
         result.exporter,
         5000, // collect every 5 seconds
         null,
@@ -81,7 +82,7 @@ pub fn main() !void {
         const duration = 0.01 + @as(f64, @floatFromInt(@mod(i, 100))) / 1000.0;
         try request_duration.record(duration, .{ "path", @as([]const u8, "/api/users") });
 
-        runtime.sleep(1 * std.time.ns_per_s);
+        clock.sleep(1 * std.time.ns_per_s);
     }
 
     std.log.info("Example completed.", .{});

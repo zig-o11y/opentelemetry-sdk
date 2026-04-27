@@ -1,26 +1,28 @@
 const std = @import("std");
-const runtime = @import("runtime");
 const sdk = @import("opentelemetry-sdk");
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
     std.debug.print("OpenTelemetry Logs SDK Example\n", .{});
     std.debug.print("===============================\n\n", .{});
 
     // Create a stdout exporter
     var stdout_buffer: [4096]u8 = undefined;
-    var stdout_exporter = sdk.logs.StdoutExporter.init(std.Io.File.stdout().writer(runtime.io(), &stdout_buffer));
+    var stdout_exporter = sdk.logs.StdoutExporter.init(std.Io.File.stdout().writer(io, &stdout_buffer));
     const exporter = stdout_exporter.asLogRecordExporter();
 
     // Create a simple processor
-    var simple_processor = sdk.logs.SimpleLogRecordProcessor.init(allocator, runtime.io(), exporter);
+    var simple_processor = sdk.logs.SimpleLogRecordProcessor.init(allocator, io, exporter);
     const processor = simple_processor.asLogRecordProcessor();
 
     // Create a logger provider
-    var provider = try sdk.logs.LoggerProvider.init(allocator, null);
+    var provider = try sdk.logs.LoggerProvider.init(allocator, io, null);
     defer provider.deinit();
 
     // Add the processor

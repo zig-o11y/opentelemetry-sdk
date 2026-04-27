@@ -1,5 +1,5 @@
 const std = @import("std");
-const runtime = @import("runtime");
+
 const Kind = @import("instrument.zig").Kind;
 const MeasurementsData = @import("measurement.zig").MeasurementsData;
 const DataPoint = @import("measurement.zig").DataPoint;
@@ -88,15 +88,17 @@ pub fn ObservableInstrument(K: Kind) type {
                 const Self = @This();
 
                 allocator: std.mem.Allocator,
+                io: std.Io,
                 lock: std.Io.Mutex = .init,
                 /// List of functions that will produce data points when called.
                 /// Functions are called by the Meter when it observes the instrument (e.g. when Metricreader collects metrics).
                 callbacks: ?[]ObserveMeasures = null,
                 context: ObservedContext,
 
-                pub fn init(allocator: std.mem.Allocator, ctx: ?ObservedContext) Self {
+                pub fn init(allocator: std.mem.Allocator, io: std.Io, ctx: ?ObservedContext) Self {
                     return Self{
                         .allocator = allocator,
+                        .io = io,
                         .context = ctx orelse .{},
                     };
                 }
@@ -111,8 +113,8 @@ pub fn ObservableInstrument(K: Kind) type {
                 /// All callbacks are expected to return a MeasurementsData with consistent type.
                 /// If different callbacks return different types, an error is returned when observing them.
                 pub fn registerCallback(self: *Self, callback: ObserveMeasures) !void {
-                    self.lock.lockUncancelable(runtime.io());
-                    defer self.lock.unlock(runtime.io());
+                    self.lock.lockUncancelable(self.io);
+                    defer self.lock.unlock(self.io);
 
                     if (self.callbacks) |c| {
                         var new_callbacks = try self.allocator.alloc(ObserveMeasures, c.len + 1);
@@ -127,8 +129,8 @@ pub fn ObservableInstrument(K: Kind) type {
                 }
 
                 fn observe(self: *Self, allocator: std.mem.Allocator) MetricObserveError!?MeasurementsData {
-                    self.lock.lockUncancelable(runtime.io());
-                    defer self.lock.unlock(runtime.io());
+                    self.lock.lockUncancelable(self.io);
+                    defer self.lock.unlock(self.io);
 
                     if (self.callbacks) |c| {
                         var m = try allocator.alloc(MeasurementsData, c.len);
@@ -196,10 +198,13 @@ fn testCallback(_: ObservedContext, allocator: std.mem.Allocator) MetricObserveE
 
 test ObservableInstrument {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
     const instrument = try allocator.create(ObservableInstrument(.ObservableUpDownCounter));
     defer allocator.destroy(instrument);
 
-    instrument.* = ObservableInstrument(.ObservableUpDownCounter).init(allocator, null);
+    instrument.* = ObservableInstrument(.ObservableUpDownCounter).init(allocator, io, null);
     defer instrument.deinit();
 
     try instrument.registerCallback(testCallback);
@@ -210,10 +215,13 @@ test "observable instrument with multiple callbacks" {
     const anotherCallback: ObserveMeasures = testCallback;
 
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
     const instrument = try allocator.create(ObservableInstrument(.ObservableGauge));
     defer allocator.destroy(instrument);
 
-    instrument.* = ObservableInstrument(.ObservableGauge).init(allocator, null);
+    instrument.* = ObservableInstrument(.ObservableGauge).init(allocator, io, null);
     defer instrument.deinit();
 
     try instrument.registerCallback(testCallback);
@@ -231,10 +239,13 @@ fn testCallbackWithAttrs(_: ObservedContext, allocator: std.mem.Allocator) Metri
 
 test "observable instrument collects data" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
     const instrument = try allocator.create(ObservableInstrument(.ObservableCounter));
     defer allocator.destroy(instrument);
 
-    instrument.* = ObservableInstrument(.ObservableCounter).init(allocator, null);
+    instrument.* = ObservableInstrument(.ObservableCounter).init(allocator, io, null);
     defer instrument.deinit();
 
     try instrument.registerCallback(testCallbackWithAttrs);
@@ -252,10 +263,13 @@ test "observable instrument collects data" {
 
 test "observable instrument fails to observe callbacks with different data types" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
     const instrument = try allocator.create(ObservableInstrument(.ObservableCounter));
     defer allocator.destroy(instrument);
 
-    instrument.* = ObservableInstrument(.ObservableCounter).init(allocator, null);
+    instrument.* = ObservableInstrument(.ObservableCounter).init(allocator, io, null);
     defer instrument.deinit();
     try instrument.registerCallback(testCallback);
     try instrument.registerCallback(testCallbackWithAttrs);
@@ -269,10 +283,13 @@ test "observable instrument fails to observe callbacks with different data types
 // Hence, we need to ensure that the observable instrument does not fetch duplicate data from multiple callbacks.
 test "observable instrument de-duplicate datapoints when fetching" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
     const instrument = try allocator.create(ObservableInstrument(.ObservableGauge));
     defer allocator.destroy(instrument);
 
-    instrument.* = ObservableInstrument(.ObservableGauge).init(allocator, null);
+    instrument.* = ObservableInstrument(.ObservableGauge).init(allocator, io, null);
     defer instrument.deinit();
 
     try instrument.registerCallback(testCallbackWithAttrs);
@@ -288,6 +305,9 @@ test "observable instrument de-duplicate datapoints when fetching" {
 
 test "observable instrument e2e measurements with context" {
     const allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
 
     const request = struct {
         const Self = @This();
@@ -315,7 +335,7 @@ test "observable instrument e2e measurements with context" {
     defer allocator.destroy(instrument);
 
     var monitor = request{ .user = "test-user" };
-    instrument.* = ObservableInstrument(.ObservableUpDownCounter).init(allocator, ObservedContext.from(&monitor));
+    instrument.* = ObservableInstrument(.ObservableUpDownCounter).init(allocator, io, ObservedContext.from(&monitor));
     defer instrument.deinit();
 
     try instrument.registerCallback(request.testCallbackWithRequest);

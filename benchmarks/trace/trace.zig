@@ -1,5 +1,4 @@
 const std = @import("std");
-const runtime = @import("runtime");
 const zbench = @import("benchmark");
 
 const sdk = @import("opentelemetry-sdk");
@@ -20,15 +19,19 @@ const Config = zbench.Config{
     .track_allocations = true,
 };
 
-fn createTracerProvider(allocator: std.mem.Allocator) !*TracerProvider {
+fn createTracerProvider(allocator: std.mem.Allocator, io: std.Io) !*TracerProvider {
     const id_gen = IDGenerator{ .TimeBased = .{} };
-    return try TracerProvider.init(allocator, runtime.io(), id_gen);
+    return try TracerProvider.init(allocator, io, id_gen);
 }
 
 // === BENCHMARK TESTS ===
 
 test "Span_Create_W/O_Attributes" {
-    const tp = try createTracerProvider(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const tp = try createTracerProvider(std.testing.allocator, io);
     defer tp.deinit();
 
     const tracer = try tp.getTracer(.{
@@ -52,13 +55,16 @@ test "Span_Create_W/O_Attributes" {
 
     try bench.addParam("Span_Create_Without_Attributes", &without_attributes, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Span_Create_With_Attributes" {
-    const tp = try createTracerProvider(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const tp = try createTracerProvider(std.testing.allocator, io);
     defer tp.deinit();
 
     const tracer = try tp.getTracer(.{
@@ -92,13 +98,16 @@ test "Span_Create_With_Attributes" {
 
     try bench.addParam("Span_Create_With_Attributes", &with_attributes, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Span_SetAttribute" {
-    const tp = try createTracerProvider(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const tp = try createTracerProvider(std.testing.allocator, io);
     defer tp.deinit();
 
     const tracer = try tp.getTracer(.{
@@ -123,13 +132,16 @@ test "Span_SetAttribute" {
 
     try bench.addParam("Span_SetAttribute", &set_attribute, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Span_AddEvent" {
-    const tp = try createTracerProvider(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const tp = try createTracerProvider(std.testing.allocator, io);
     defer tp.deinit();
 
     const tracer = try tp.getTracer(.{
@@ -160,13 +172,16 @@ test "Span_AddEvent" {
 
     try bench.addParam("Span_AddEvent", &add_event, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Span_Nested_Creation" {
-    const tp = try createTracerProvider(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const tp = try createTracerProvider(std.testing.allocator, io);
     defer tp.deinit();
 
     const tracer = try tp.getTracer(.{
@@ -194,13 +209,16 @@ test "Span_Nested_Creation" {
 
     try bench.addParam("Span_Nested_Creation", &nested_spans, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Span_Non_Recording" {
-    const tp = try createTracerProvider(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const tp = try createTracerProvider(std.testing.allocator, io);
     defer tp.deinit();
 
     const tracer = try tp.getTracer(.{
@@ -229,13 +247,16 @@ test "Span_Non_Recording" {
 
     try bench.addParam("Span_Non_Recording", &non_recording, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }
 
 test "Span_Concurrent_Creation" {
-    const tp = try createTracerProvider(std.testing.allocator);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const tp = try createTracerProvider(std.testing.allocator, io);
     defer tp.deinit();
 
     const tracer = try tp.getTracer(.{
@@ -301,7 +322,6 @@ test "Span_Concurrent_Creation" {
 
     try bench.addParam("Span_Concurrent_Creation", &concurrent_spans, .{});
 
-    const io = runtime.io();
     const stderr: std.Io.File = .stderr();
     try bench.run(io, stderr);
 }

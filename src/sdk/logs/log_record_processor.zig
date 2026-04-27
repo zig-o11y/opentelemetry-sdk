@@ -1,5 +1,6 @@
 const std = @import("std");
-const runtime = @import("runtime");
+const clock = @import("clock");
+const TestRuntime = @import("../../testing.zig").TestRuntime;
 const logs = @import("../../api/logs/logger_provider.zig");
 const context = @import("../../api/context.zig");
 const LogRecordExporter = @import("log_record_exporter.zig").LogRecordExporter;
@@ -332,7 +333,7 @@ pub const BatchingLogRecordProcessor = struct {
             self.mutex.unlock(self.io);
 
             if (should_wait) {
-                _ = self.wake.waitTimeout(self.io, runtime.timeoutAfterMs(self.scheduled_delay_millis)) catch {};
+                _ = self.wake.waitTimeout(self.io, clock.timeoutAfterMs(self.scheduled_delay_millis)) catch {};
             }
 
             self.mutex.lockUncancelable(self.io);
@@ -387,6 +388,9 @@ pub const BatchingLogRecordProcessor = struct {
 
 test "SimpleLogRecordProcessor basic functionality" {
     const allocator = std.testing.allocator;
+    var rt = TestRuntime.init(allocator);
+    defer rt.deinit();
+    const io = rt.io();
 
     // Mock exporter
     const MockExporter = struct {
@@ -457,7 +461,7 @@ test "SimpleLogRecordProcessor basic functionality" {
     defer mock_exporter.deinit();
 
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, runtime.io(), exporter);
+    var processor = SimpleLogRecordProcessor.init(allocator, io, exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     // Create a test log record
@@ -481,6 +485,9 @@ test "SimpleLogRecordProcessor basic functionality" {
 
 test "SimpleLogRecordProcessor with attributes" {
     const allocator = std.testing.allocator;
+    var rt = TestRuntime.init(allocator);
+    defer rt.deinit();
+    const io = rt.io();
 
     // Mock exporter (simplified for this test)
     const MockExporter = struct {
@@ -506,7 +513,7 @@ test "SimpleLogRecordProcessor with attributes" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, runtime.io(), exporter);
+    var processor = SimpleLogRecordProcessor.init(allocator, io, exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     // Create a test log record with attributes
@@ -530,6 +537,9 @@ test "SimpleLogRecordProcessor with attributes" {
 
 test "BatchingLogRecordProcessor basic functionality" {
     const allocator = std.testing.allocator;
+    var rt = TestRuntime.init(allocator);
+    defer rt.deinit();
+    const io = rt.io();
 
     // Mock exporter (simplified)
     const MockExporter = struct {
@@ -562,7 +572,7 @@ test "BatchingLogRecordProcessor basic functionality" {
     var mock_exporter = MockExporter.init();
     const exporter = mock_exporter.asLogRecordExporter();
 
-    var processor = try BatchingLogRecordProcessor.init(allocator, runtime.io(), exporter, .{
+    var processor = try BatchingLogRecordProcessor.init(allocator, io, exporter, .{
         .max_export_batch_size = 2, // Small batch size for testing
         .scheduled_delay_millis = 100, // Short delay for testing
     });
@@ -591,7 +601,7 @@ test "BatchingLogRecordProcessor basic functionality" {
     }
 
     // Wait a bit for the background thread to process
-    runtime.sleep(200 * std.time.ns_per_ms);
+    clock.sleep(200 * std.time.ns_per_ms);
 
     // Force flush to export remaining log records
     try log_processor.forceFlush();
