@@ -1,7 +1,7 @@
 pub const Configuration = struct {
     /// The endpoint to send the data to.
     /// Must be in the form of "host:port", withouth scheme.
-    endpoint: []const u8 = "localhost:4138",
+    endpoint: []const u8 = "localhost:4317",
 
     /// Defines if the gRPC client can use plaintext connection.
     /// true: Use insecure credentials
