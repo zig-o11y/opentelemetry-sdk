@@ -15,7 +15,6 @@
 //! ```
 const std = @import("std");
 
-
 const attributes = @import("../../attributes.zig");
 const AttributeValue = attributes.AttributeValue;
 

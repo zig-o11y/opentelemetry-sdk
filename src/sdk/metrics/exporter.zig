@@ -662,7 +662,10 @@ test "e2e periodic exporting metric reader" {
 
     const metric_exporter = try MetricExporter.new(allocator, io, &inMem.exporter);
 
-    var per = try PeriodicExportingReader.init(allocator, io, mp,
+    var per = try PeriodicExportingReader.init(
+        allocator,
+        io,
+        mp,
         metric_exporter,
         waiting_ms,
         null,

@@ -1,6 +1,5 @@
 const std = @import("std");
 
-
 const trace = @import("../../../api/trace.zig");
 const SpanExporter = @import("../span_exporter.zig").SpanExporter;
 const Code = @import("../../../api/trace/code.zig").Code;

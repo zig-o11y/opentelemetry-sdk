@@ -145,8 +145,7 @@ fn validateHttpResponse(response: []const u8) !void {
         return error.InvalidHttpStatus;
     }
 
-    if (std.mem.indexOf(u8, response, "Content-Type: text/plain; version=0.0.4")) |_| {
-    } else {
+    if (std.mem.indexOf(u8, response, "Content-Type: text/plain; version=0.0.4")) |_| {} else {
         std.log.err("Missing or incorrect Content-Type header", .{});
         return error.InvalidContentType;
     }
@@ -160,14 +159,12 @@ fn extractHttpBody(response: []const u8) ?[]const u8 {
 }
 
 fn validatePrometheusFormat(body: []const u8) !void {
-    if (std.mem.indexOf(u8, body, "# HELP")) |_| {
-    } else {
+    if (std.mem.indexOf(u8, body, "# HELP")) |_| {} else {
         std.log.err("Missing # HELP lines in Prometheus output", .{});
         return error.MissingHelpLines;
     }
 
-    if (std.mem.indexOf(u8, body, "# TYPE")) |_| {
-    } else {
+    if (std.mem.indexOf(u8, body, "# TYPE")) |_| {} else {
         std.log.err("Missing # TYPE lines in Prometheus output", .{});
         return error.MissingTypeLines;
     }

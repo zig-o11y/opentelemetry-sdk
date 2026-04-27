@@ -1,6 +1,5 @@
 const std = @import("std");
 
-
 const MetricExporter = @import("../exporter.zig").MetricExporter;
 const ExporterImpl = @import("../exporter.zig").ExporterImpl;
 

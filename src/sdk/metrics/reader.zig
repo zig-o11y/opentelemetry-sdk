@@ -1,6 +1,5 @@
 const std = @import("std");
 
-
 const log = std.log.scoped(.reader);
 
 const pbcommon = @import("opentelemetry-proto").common;

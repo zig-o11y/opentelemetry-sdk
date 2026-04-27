@@ -33,7 +33,10 @@ pub fn main() !void {
     defer result.prometheus.stop();
 
     // Create a periodic reader that collects metrics every 5 seconds
-    const periodic_reader = try PeriodicExportingReader.init(allocator, io, mp,
+    const periodic_reader = try PeriodicExportingReader.init(
+        allocator,
+        io,
+        mp,
         result.exporter,
         5000, // collect every 5 seconds
         null,
