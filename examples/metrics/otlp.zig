@@ -43,6 +43,7 @@ pub fn main() !void {
     defer config.deinit();
 
     var otel = try setupTelemetry(allocator, io, config);
+    defer otel.meter_provider.shutdown();
     defer otel.otlp_exporter.deinit();
     defer otel.metric_reader.shutdown();
 
