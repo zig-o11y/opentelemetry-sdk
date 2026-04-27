@@ -73,6 +73,13 @@ pub fn send(
     }
 }
 
+/// Selects the gRPC channel credentials based on `config.insecure` and the
+/// presence of TLS material. See `Configuration.insecure` for the full table.
+///
+/// TODO: support UDS endpoints (e.g. "unix:/var/run/otel.sock"). Over UDS,
+/// libgrpc's LOCAL credentials provide PRIVACY_AND_INTEGRITY (the TCP variant
+/// used here only checks the peer is loopback and provides no encryption), so
+/// they would become the right default once the endpoint type can express UDS.
 fn makeCredentials(arena: Allocator, config: Configuration) !grpc.client.Credentials {
     if (config.insecure) |insecure| {
         if (insecure) {
@@ -81,11 +88,16 @@ fn makeCredentials(arena: Allocator, config: Configuration) !grpc.client.Credent
         }
         return makeSSLCredentials(arena, config);
     }
-    if (std.mem.startsWith(u8, config.endpoint, "localhost:")) {
-        log.debug("Selecting local TCP credentials", .{});
-        return .localTCP();
-    }
-    return makeSSLCredentials(arena, config);
+    if (config.server_root_certificates_filename != null or
+        config.client_certificate_filename != null or
+        config.client_private_key_filename != null)
+        return makeSSLCredentials(arena, config);
+    // No explicit choice and no TLS material: fall back to LOCAL_TCP. It is
+    // plaintext, but gRPC rejects the connection at handshake time when the
+    // peer is not on loopback — so a misconfigured remote endpoint fails
+    // closed instead of silently exfiltrating cleartext.
+    log.debug("Selecting local TCP credentials", .{});
+    return .localTCP();
 }
 
 inline fn readFile(allocator: Allocator, filename: []const u8) ![:0]u8 {
