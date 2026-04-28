@@ -718,9 +718,7 @@ test "Configuration TracerProvider with SDK disabled" {
     const random_generator = RandomIDGenerator.init(default_prng.random());
     const id_gen = IDGenerator{ .Random = random_generator };
 
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     var provider = try TracerProvider.init(allocator, io, id_gen);
     defer provider.deinit();
 
@@ -750,9 +748,7 @@ test "ConfigurationMeterProvider with SDK disabled" {
     Configuration.set(config_from_env);
 
     // Create MeterProvider
-    var threaded2: std.Io.Threaded = .init(allocator, .{});
-    defer threaded2.deinit();
-    var provider = try MeterProvider.init(allocator, threaded2.io());
+    var provider = try MeterProvider.init(allocator, std.testing.io);
     defer provider.shutdown();
 
     // Verify SDK is disabled
@@ -777,9 +773,7 @@ test "Configuration LoggerProvider with SDK disabled" {
     Configuration.set(config_from_env);
 
     // Create LoggerProvider
-    var threaded3: std.Io.Threaded = .init(allocator, .{});
-    defer threaded3.deinit();
-    var provider = try LoggerProvider.init(allocator, threaded3.io(), null);
+    var provider = try LoggerProvider.init(allocator, std.testing.io, null);
     defer provider.deinit();
 
     // Verify SDK is disabled
@@ -817,9 +811,7 @@ test "Configuration SDK disabled with OTEL_SDK_DISABLED=false" {
     const random_generator = RandomIDGenerator.init(default_prng.random());
     const id_gen = IDGenerator{ .Random = random_generator };
 
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     var tracer_provider = try TracerProvider.init(allocator, io, id_gen);
     defer tracer_provider.deinit();
 

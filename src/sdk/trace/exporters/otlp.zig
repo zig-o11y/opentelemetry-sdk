@@ -306,9 +306,7 @@ pub const OTLPExporter = struct {
 
 test "OTLPExporter with InstrumentationScope" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
@@ -379,9 +377,7 @@ test "OTLPExporter with InstrumentationScope" {
 
 test "OTLPExporter basic functionality" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();

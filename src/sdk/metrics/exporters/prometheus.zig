@@ -889,9 +889,7 @@ test "PrometheusExporter: server start and stop" {
     // TODO: Switch to port 0 + discovery to eliminate flakes under parallel tests.
     // This requires exposing the bound port from the Server socket.
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const exporter = try PrometheusExporter.init(allocator, io, .{
         .host = "127.0.0.1",
@@ -916,9 +914,7 @@ test "PrometheusExporter: server start and stop" {
 
 test "PrometheusExporter: double start returns error" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const exporter = try PrometheusExporter.init(allocator, io, .{
         .host = "127.0.0.1",
@@ -936,9 +932,7 @@ test "PrometheusExporter: double start returns error" {
 
 test "PrometheusExporter: repeated start/stop cycles" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const exporter = try PrometheusExporter.init(allocator, io, .{
         .host = "127.0.0.1",
@@ -961,9 +955,7 @@ test "PrometheusExporter: repeated start/stop cycles" {
 
 test "PrometheusExporter: concurrent HTTP requests" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const exporter = try PrometheusExporter.init(allocator, io, .{
         .host = "127.0.0.1",
@@ -1013,9 +1005,7 @@ test "PrometheusExporter: concurrent HTTP requests" {
 
 test "PrometheusExporter: shutdown does not block" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const exporter = try PrometheusExporter.init(allocator, io, .{
         .host = "127.0.0.1",
@@ -1038,9 +1028,7 @@ test "PrometheusExporter: shutdown does not block" {
 
 test "PrometheusExporter: server handles invalid path with 404" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const exporter = try PrometheusExporter.init(allocator, io, .{
         .host = "127.0.0.1",
@@ -1076,9 +1064,7 @@ test "PrometheusExporter: server handles invalid path with 404" {
 
 test "PrometheusExporter e2e" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();

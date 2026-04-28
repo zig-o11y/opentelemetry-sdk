@@ -293,9 +293,7 @@ fn waiterExporter(_: *ExporterImpl, _: []Measurements) MetricReadError!void {
 
 test "metric exporter no-op" {
     var noop = ExporterImpl{ .exportFn = noopExporter };
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     var me = try MetricExporter.new(std.testing.allocator, io, &noop);
     defer me.shutdown();
 
@@ -317,9 +315,7 @@ test "metric exporter no-op" {
 
 test "metric exporter is called by metric reader" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();
@@ -344,9 +340,7 @@ test "metric exporter is called by metric reader" {
 
 test "metric exporter force flush succeeds" {
     var noop = ExporterImpl{ .exportFn = noopExporter };
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     var me = try MetricExporter.new(std.testing.allocator, io, &noop);
     defer me.shutdown();
 
@@ -374,9 +368,7 @@ fn backgroundRunner(me: *MetricExporter, metrics: []Measurements) !void {
 
 test "metric exporter force flush fails" {
     var wait = ExporterImpl{ .exportFn = waiterExporter };
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     var me = try MetricExporter.new(std.testing.allocator, io, &wait);
     defer me.shutdown();
 
@@ -410,9 +402,7 @@ test "metric exporter force flush fails" {
 
 test "metric exporter exportBatch with timeout" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     // Create a slow exporter that will exceed the timeout
     const SlowExporter = struct {
@@ -449,9 +439,7 @@ test "metric exporter exportBatch with timeout" {
 
 test "metric exporter builder in memory" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();
@@ -494,9 +482,7 @@ test "metric exporter builder in memory" {
 
 test "metric exporter builder stdout" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();
@@ -648,9 +634,7 @@ fn collectAndExport(
 
 test "e2e periodic exporting metric reader" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();

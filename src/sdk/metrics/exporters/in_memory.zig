@@ -71,9 +71,7 @@ pub const InMemoryExporter = struct {
 
 test "exporters/in_memory" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var inMemExporter = try InMemoryExporter.init(allocator, io);
     defer inMemExporter.deinit();

@@ -825,9 +825,7 @@ test "otlp exp backoff delay calculation" {
 // and there is no memory leak.
 test "otlp HTTPClient send fails for missing server" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     var config = try ConfigOptions.init(allocator);
     defer config.deinit();
 

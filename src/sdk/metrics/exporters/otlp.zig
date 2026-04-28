@@ -475,9 +475,7 @@ test "exporters/otlp conversion for ExponentialHistogramDataPoint" {
 
 test "exporters/otlp init/deinit" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 

@@ -378,9 +378,7 @@ pub const Logger = struct {
 
 test "LoggerProvider basic functionality" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var provider = try LoggerProvider.init(allocator, io, null);
     defer provider.deinit();
@@ -393,9 +391,7 @@ test "LoggerProvider basic functionality" {
 
 test "LoggerProvider same logger for same scope" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var provider = try LoggerProvider.init(allocator, io, null);
     defer provider.deinit();
@@ -409,9 +405,7 @@ test "LoggerProvider same logger for same scope" {
 
 test "LoggerProvider with processor" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     // Mock exporter
     const MockExporter = struct {
@@ -457,9 +451,7 @@ test "LoggerProvider with processor" {
 
 test "LoggerProvider with custom resource" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const service_name: []const u8 = "my-service";
     const service_version: []const u8 = "1.0.0";
@@ -482,9 +474,7 @@ test "LoggerProvider with custom resource" {
 
 test "Logger log records inherit resource from provider" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const service_name: []const u8 = "test-service";
     const host_name: []const u8 = "test-host";
@@ -543,9 +533,7 @@ test "Logger log records inherit resource from provider" {
 
 test "Logger.enabled() returns true with active processors" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     // Mock exporter
     const MockExporter = struct {
@@ -586,9 +574,7 @@ test "Logger.enabled() returns true with active processors" {
 
 test "Logger.enabled() returns false when no processors" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var provider = try LoggerProvider.init(allocator, io, null);
     defer provider.deinit();
@@ -605,9 +591,7 @@ test "Logger.enabled() returns false when no processors" {
 
 test "Logger.enabled() returns false after shutdown" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     // Mock exporter
     const MockExporter = struct {
@@ -652,9 +636,7 @@ test "Logger.enabled() returns false after shutdown" {
 
 test "Logger.enabled() with multiple processors (OR logic)" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     // Create a custom processor that always returns false
     const AlwaysDisabledProcessor = struct {
@@ -725,9 +707,7 @@ test "Logger.enabled() with multiple processors (OR logic)" {
 
 test "Logger.enabled() with severity parameter" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     // Create a severity-filtering processor
     const SeverityFilterProcessor = struct {
@@ -782,9 +762,7 @@ test "Logger.enabled() with severity parameter" {
 
 test "LoggerProvider with config from environment" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const cfg = try Configuration.initFromEnv(allocator);
     defer cfg.deinit();

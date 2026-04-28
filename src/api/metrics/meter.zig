@@ -337,9 +337,7 @@ pub const Meter = struct {
 };
 
 test "default meter provider can be fetched" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -347,9 +345,7 @@ test "default meter provider can be fetched" {
 }
 
 test "custom meter provider can be created" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -361,9 +357,7 @@ test "meter provider with config from environment" {
     defer cfg.deinit();
     Configuration.set(cfg);
 
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -377,9 +371,7 @@ test "meter provider with config from environment" {
 test "meter can be created from custom provider" {
     const meter_name = "my-meter";
     const meter_version = "my-meter";
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -395,9 +387,7 @@ test "meter can be created from default provider with schema url and attributes"
     const meter_name = "my-meter";
     const meter_version = "my-meter";
 
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -412,9 +402,7 @@ test "meter can be created from default provider with schema url and attributes"
 }
 
 test "meter register instrument twice with same name fails" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -428,9 +416,7 @@ test "meter register instrument twice with same name fails" {
 }
 
 test "meter register instrument" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -458,9 +444,7 @@ test "meter register instrument" {
 }
 
 test "meter provider adds metric reader" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     var mr = MetricReader{ .allocator = std.testing.allocator, .io = io };
@@ -470,9 +454,7 @@ test "meter provider adds metric reader" {
 }
 
 test "meter provider adds multiple metric readers" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     var mr1 = MetricReader{ .allocator = std.testing.allocator, .io = io };
@@ -484,9 +466,7 @@ test "meter provider adds multiple metric readers" {
 }
 
 test "metric reader cannot be registered with multiple providers" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp1 = try MeterProvider.init(std.testing.allocator, io);
     defer mp1.shutdown();
 
@@ -501,9 +481,7 @@ test "metric reader cannot be registered with multiple providers" {
 }
 
 test "metric reader cannot be registered twice on same meter provider" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp1 = try MeterProvider.init(std.testing.allocator, io);
     defer mp1.shutdown();
 
@@ -515,9 +493,7 @@ test "metric reader cannot be registered twice on same meter provider" {
 }
 
 test "meter provider end to end" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -548,9 +524,7 @@ test "meter provider with arena allocator" {
     var arena = std.heap.ArenaAllocator.init(fb.allocator());
     defer arena.deinit();
 
-    var threaded: std.Io.Threaded = .init(arena.allocator(), .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(arena.allocator(), io);
     defer mp.shutdown();
 
@@ -743,9 +717,7 @@ pub const AggregatedMetrics = struct {
 };
 
 test "aggregated metrics deduplicated from meter without attributes" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     const meter = try mp.getMeter(.{ .name = "test", .schema_url = "http://example.com" });
@@ -770,9 +742,7 @@ test "aggregated metrics deduplicated from meter without attributes" {
 }
 
 test "aggregated metrics deduplicated from meter with attributes" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -813,9 +783,7 @@ test "aggregated metrics deduplicated from meter with attributes" {
 }
 
 test "aggregated metrics fetch to owned slice" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -841,9 +809,7 @@ test "aggregated metrics fetch to owned slice" {
 }
 
 test "aggregated metrics do not duplicate data points" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -874,9 +840,7 @@ test "aggregated metrics do not duplicate data points" {
 }
 
 test "aggregated metrics have timestamps" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -901,9 +865,7 @@ test "aggregated metrics have timestamps" {
 }
 
 test "aggregated metrics with custom views" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -940,9 +902,7 @@ test "aggregated metrics with custom views" {
 }
 
 test "view associated with meter provider" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -1001,9 +961,7 @@ test "view associated with meter provider" {
 }
 
 test "view is additive processing with conflicts" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 

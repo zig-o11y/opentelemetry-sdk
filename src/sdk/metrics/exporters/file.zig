@@ -140,9 +140,7 @@ pub const FileExporter = struct {
 
 test "FileExporter init and deinit" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const file_exporter = try FileExporter.init(allocator, io, view.DefaultTemporality, .{});
     defer file_exporter.deinit();
@@ -150,9 +148,7 @@ test "FileExporter init and deinit" {
 
 test "FileExporter export to file" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const test_file = "test_metrics_file.jsonl";
 
     // Clean up any existing test file

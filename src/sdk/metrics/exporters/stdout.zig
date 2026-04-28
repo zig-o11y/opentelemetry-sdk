@@ -75,9 +75,7 @@ pub const StdoutExporter = struct {
 
 test "exporters/stdout" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const val = @as(u64, 42);
 

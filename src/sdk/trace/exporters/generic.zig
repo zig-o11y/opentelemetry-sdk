@@ -133,9 +133,7 @@ test "exporters/trace GenericWriterExporter" {
 test StdoutExporter {
     // Note: We can't easily test actual stdout output, so we verify the type compiles
     // and can be instantiated correctly
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_exporter = StdoutExporter.init(std.Io.File.stdout().writer(io, &stdout_buffer));
     var exporter = stdout_exporter.asSpanExporter();

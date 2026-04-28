@@ -21,9 +21,7 @@ const attributesToProtobufKeyValueList = @import("sdk/metrics/exporters/otlp.zig
 
 test "otlp HTTPClient send fails on non-retryable error" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var server = try HTTPTestServer.init(allocator, io, badRequest);
     defer server.deinit();
@@ -48,9 +46,7 @@ test "otlp HTTPClient send fails on non-retryable error" {
 
 test "otlp HTTPClient send retries on retryable error" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const max_retries: usize = 5;
     const max_requests: usize = max_retries + 1; // +1 for the initial request
@@ -95,9 +91,7 @@ test "otlp HTTPClient send retries on retryable error" {
 
 test "otlp HTTPClient uncompressed protobuf metrics payload" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var server = try HTTPTestServer.init(allocator, io, assertUncompressedProtobufMetricsBodyCanBeParsed);
     defer server.deinit();
@@ -119,9 +113,7 @@ test "otlp HTTPClient uncompressed protobuf metrics payload" {
 
 test "otlp HTTPClient uncompressed json metrics payload" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var server = try HTTPTestServer.init(allocator, io, assertUncompressedJsonMetricsBodyCanBeParsed);
     defer server.deinit();
@@ -148,9 +140,7 @@ test "otlp HTTPClient uncompressed json metrics payload" {
 // See https://github.com/zig-o11y/opentelemetry-sdk/issues/124
 test "otlp HTTPClient http_json payload has correctly formatted attribute values" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var server = try HTTPTestServer.init(allocator, io, assertJsonAttributeValueNotDoubleNested);
     defer server.deinit();
@@ -175,9 +165,7 @@ test "otlp HTTPClient http_json payload has correctly formatted attribute values
 
 test "otlp HTTPClient compressed json metrics payload" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var server = try HTTPTestServer.init(allocator, io, assertCompressedJsonMetricsBodyCanBeParsed);
     defer server.deinit();
@@ -202,9 +190,7 @@ test "otlp HTTPClient compressed json metrics payload" {
 
 test "otlp HTTPClient compressed protobuf metrics payload" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var server = try HTTPTestServer.init(allocator, io, assertCompressionHeaderGzip);
     defer server.deinit();
@@ -227,9 +213,7 @@ test "otlp HTTPClient compressed protobuf metrics payload" {
 
 test "otlp HTTPClient send extra headers" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var server = try HTTPTestServer.init(allocator, io, assertExtraHeaders);
     defer server.deinit();
@@ -556,9 +540,7 @@ const HTTPTestServer = struct {
 
 test "otlp ExportFile appends metrics to file" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();

@@ -292,9 +292,7 @@ pub const OTLPExporter = struct {
 
 test "OTLPExporter basic initialization" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
@@ -383,9 +381,7 @@ test "Attribute to OTLP conversion" {
 
 test "Log record to OTLP conversion with all fields" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
@@ -434,9 +430,7 @@ test "Log record to OTLP conversion with all fields" {
 
 test "Log records grouped by instrumentation scope" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
@@ -524,9 +518,7 @@ test "Log records grouped by instrumentation scope" {
 
 test "Resource attributes in OTLP export" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
@@ -575,9 +567,7 @@ test "Resource attributes in OTLP export" {
 
 test "Trace context hex conversion" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
@@ -616,9 +606,7 @@ test "Trace context hex conversion" {
 
 test "Memory cleanup verification" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();

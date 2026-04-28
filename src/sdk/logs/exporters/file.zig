@@ -134,9 +134,7 @@ pub const FileExporter = struct {
 
 test "FileExporter init and deinit" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var file_exporter = try FileExporter.init(allocator, io, Resource.empty(), .{});
     defer file_exporter.deinit();

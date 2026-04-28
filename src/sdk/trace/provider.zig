@@ -1,6 +1,5 @@
 const std = @import("std");
 const clock = @import("clock");
-const TestRuntime = @import("../../testing.zig").TestRuntime;
 const context = @import("../../api/context.zig");
 
 // NOTE: API-surface mutex operations use lockUncancelable so that user-facing
@@ -371,9 +370,7 @@ pub const Tracer = struct {
 
 test "TracerProvider basic functionality" {
     const allocator = std.testing.allocator;
-    var rt = TestRuntime.init(allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
 
     // Create ID generator
     const seed = 0;
@@ -441,9 +438,7 @@ const MockProcessor = struct {
 };
 test "TracerProvider with processors" {
     const allocator = std.testing.allocator;
-    var rt = TestRuntime.init(allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
 
     // Create ID generator
     const seed = 0;
@@ -471,9 +466,7 @@ test "TracerProvider with processors" {
 
 test "TracerProvider with config from environment" {
     const allocator = std.testing.allocator;
-    var rt = TestRuntime.init(allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
 
     const cfg = try Configuration.initFromEnv(allocator);
     defer cfg.deinit();
@@ -496,9 +489,7 @@ test "TracerProvider with config from environment" {
 
 test "TracerProvider end span with links and events" {
     const allocator = std.testing.allocator;
-    var rt = TestRuntime.init(allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
 
     const seed = 0;
     var default_prng = std.Random.DefaultPrng.init(seed);

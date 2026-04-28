@@ -519,9 +519,7 @@ pub fn Gauge(comptime T: type) type {
 const MeterProvider = @import("meter.zig").MeterProvider;
 
 test "counter with unsupported type does not leak" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     const meter = try mp.getMeter(.{ .name = "my-meter" });
@@ -530,9 +528,7 @@ test "counter with unsupported type does not leak" {
 }
 
 test "meter can create counter instrument and record increase without attributes" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     const meter = try mp.getMeter(.{ .name = "my-meter" });
@@ -543,9 +539,7 @@ test "meter can create counter instrument and record increase without attributes
 }
 
 test "meter can create counter instrument and record increase with attributes" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     const meter = try mp.getMeter(.{ .name = "my-meter" });
@@ -571,9 +565,7 @@ test "meter can create counter instrument and record increase with attributes" {
 }
 
 test "histogram records value without explicit buckets" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     const meter = try mp.getMeter(.{ .name = "my-meter" });
@@ -601,9 +593,7 @@ test "histogram records value without explicit buckets" {
 }
 
 test "histogram records value with explicit buckets" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     const meter = try mp.getMeter(.{ .name = "my-meter" });
@@ -633,9 +623,7 @@ test "histogram records value with explicit buckets" {
 }
 
 test "histogram keeps track of bucket counts by attribute" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     const meter = try mp.getMeter(.{ .name = "my-meter" });
@@ -665,9 +653,7 @@ test "histogram keeps track of bucket counts by attribute" {
 }
 
 test "histogram keeps track of count, sum and min/max by attribute" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     const meter = try mp.getMeter(.{ .name = "my-meter" });
@@ -712,9 +698,7 @@ test "histogram keeps track of count, sum and min/max by attribute" {
 }
 
 test "gauge instrument records value without attributes" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     const meter = try mp.getMeter(.{ .name = "my-meter" });
@@ -727,9 +711,7 @@ test "gauge instrument records value without attributes" {
 }
 
 test "upDownCounter instrument records and stores value" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     const meter = try mp.getMeter(.{ .name = "my-meter" });
@@ -754,9 +736,7 @@ test "upDownCounter instrument records and stores value" {
 }
 
 test "instrument in meter and instrument in data are the same" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -787,9 +767,7 @@ test "instrument in meter and instrument in data are the same" {
 }
 
 test "instrument fetches measurements from inner" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -823,9 +801,7 @@ test "instrument fetches measurements from inner" {
 }
 
 test "counter thread-safety between datapoints collection and recording" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -875,9 +851,7 @@ fn testCounterCollect(counter: *Counter(u64)) !void {
 }
 
 test "histogram thread-safety" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -926,9 +900,7 @@ fn testHistogramCollect(histogram: *Histogram(u64)) !void {
 }
 
 test "instrument cleans up internal state when datapoints are fetched" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 
@@ -955,9 +927,7 @@ test "instrument cleans up internal state when datapoints are fetched" {
 const MetricObserveError = AsyncInstrument.MetricObserveError;
 
 test "async instrument registered in meter" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
 

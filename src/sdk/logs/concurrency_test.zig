@@ -1,6 +1,5 @@
 const std = @import("std");
 const clock = @import("clock");
-const TestRuntime = @import("../../testing.zig").TestRuntime;
 const InstrumentationScope = @import("../../scope.zig").InstrumentationScope;
 const Attribute = @import("../../attributes.zig").Attribute;
 const Context = @import("../../api.zig").context.Context;
@@ -163,9 +162,7 @@ fn addProcessorWorker(provider: *LoggerProvider, processor: LogRecordProcessor) 
 }
 
 test "concurrent logger acquisition - same scope" {
-    var rt = TestRuntime.init(std.testing.allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
     var provider = try LoggerProvider.init(std.testing.allocator, io, null);
     defer provider.deinit();
 
@@ -192,9 +189,7 @@ test "concurrent logger acquisition - same scope" {
 }
 
 test "concurrent logger acquisition - different scopes" {
-    var rt = TestRuntime.init(std.testing.allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
     var provider = try LoggerProvider.init(std.testing.allocator, io, null);
     defer provider.deinit();
 
@@ -233,9 +228,7 @@ test "concurrent logger acquisition - different scopes" {
 }
 
 test "concurrent log emission" {
-    var rt = TestRuntime.init(std.testing.allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
     var provider = try LoggerProvider.init(std.testing.allocator, io, null);
     defer provider.deinit();
 
@@ -264,9 +257,7 @@ test "concurrent log emission" {
 }
 
 test "concurrent processor operations" {
-    var rt = TestRuntime.init(std.testing.allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
     var provider = try LoggerProvider.init(std.testing.allocator, io, null);
     defer provider.deinit();
 
@@ -312,9 +303,7 @@ test "concurrent processor operations" {
 }
 
 test "concurrent shutdown" {
-    var rt = TestRuntime.init(std.testing.allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
     var provider = try LoggerProvider.init(std.testing.allocator, io, null);
     defer provider.deinit();
 
@@ -342,9 +331,7 @@ test "concurrent shutdown" {
 }
 
 test "concurrent shutdown with emission" {
-    var rt = TestRuntime.init(std.testing.allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
     var provider = try LoggerProvider.init(std.testing.allocator, io, null);
     defer provider.deinit();
 
@@ -378,9 +365,7 @@ test "concurrent shutdown with emission" {
 }
 
 test "concurrent forceFlush" {
-    var rt = TestRuntime.init(std.testing.allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
     var provider = try LoggerProvider.init(std.testing.allocator, io, null);
     defer provider.deinit();
 
@@ -412,9 +397,7 @@ test "concurrent forceFlush" {
 }
 
 test "concurrent enabled checks" {
-    var rt = TestRuntime.init(std.testing.allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
     var provider = try LoggerProvider.init(std.testing.allocator, io, null);
     defer provider.deinit();
 
@@ -476,9 +459,7 @@ test "batching processor concurrency" {
         }
     };
 
-    var rt = TestRuntime.init(std.testing.allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
 
     var mock_exporter = MockExporter.init();
     var batching_processor = try BatchingLogRecordProcessor.init(
@@ -531,9 +512,7 @@ test "batching processor concurrency" {
 }
 
 test "mixed operations stress test" {
-    var rt = TestRuntime.init(std.testing.allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
     var provider = try LoggerProvider.init(std.testing.allocator, io, null);
     defer provider.deinit();
 

@@ -65,9 +65,7 @@ test "instrument name must conform to the OpenTelemetry specification" {
 }
 
 test "meter cannot create instrument if name does not conform to the OpenTelemetry specification" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const mp = try MeterProvider.init(std.testing.allocator, io);
     defer mp.shutdown();
     const m = try mp.getMeter(.{ .name = "my-meter" });

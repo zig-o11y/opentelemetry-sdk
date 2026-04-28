@@ -1,6 +1,5 @@
 const std = @import("std");
 const clock = @import("clock");
-const TestRuntime = @import("../../testing.zig").TestRuntime;
 const trace = @import("../../api/trace.zig");
 const context = @import("../../api/context.zig");
 const SpanExporter = @import("span_exporter.zig").SpanExporter;
@@ -406,9 +405,7 @@ pub const BatchingProcessor = struct {
 
 test "SimpleProcessor basic functionality" {
     const allocator = std.testing.allocator;
-    var rt = TestRuntime.init(allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
 
     // Mock exporter
     const MockExporter = struct {
@@ -475,9 +472,7 @@ test "SimpleProcessor basic functionality" {
 
 test "BatchingProcessor basic functionality" {
     const allocator = std.testing.allocator;
-    var rt = TestRuntime.init(allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
 
     // Mock exporter (same as above)
     const MockExporter = struct {

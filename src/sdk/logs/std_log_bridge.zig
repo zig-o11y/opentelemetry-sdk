@@ -33,7 +33,6 @@
 
 const std = @import("std");
 
-const TestRuntime = @import("../../testing.zig").TestRuntime;
 const LoggerProvider = @import("../../api/logs/logger_provider.zig").LoggerProvider;
 const Logger = @import("../../api/logs/logger_provider.zig").Logger;
 const InstrumentationScope = @import("../../scope.zig").InstrumentationScope;
@@ -299,9 +298,7 @@ pub fn logFn(
 
 test "std_log_bridge basic configuration" {
     const allocator = std.testing.allocator;
-    var rt = TestRuntime.init(allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
 
     var provider = try LoggerProvider.init(allocator, io, null);
     defer provider.deinit();
@@ -338,9 +335,7 @@ const sdk = @import("../../sdk.zig");
 const InMemoryExporter = @import("../../sdk/logs/exporters/generic.zig").InMemoryExporter;
 
 test "std_log_bridge logFn prints text for body" {
-    var __t2: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer __t2.deinit();
-    const io2 = __t2.io();
+    const io2 = std.testing.io;
     const provider = try LoggerProvider.init(std.testing.allocator, io2, null);
     defer provider.deinit();
 
@@ -375,9 +370,7 @@ test "std_log_bridge logFn prints text for body" {
 
 test "std_log_bridge shutdown cleans up state" {
     const allocator = std.testing.allocator;
-    var rt = TestRuntime.init(allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
 
     var provider = try LoggerProvider.init(allocator, io, null);
     defer provider.deinit();

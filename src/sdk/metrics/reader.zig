@@ -142,9 +142,7 @@ pub const MetricReader = struct {
 };
 
 test "metric reader shutdown prevents collect() to execute" {
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     var noop = exporter.ExporterImpl{ .exportFn = exporter.noopExporter };
     const metric_exporter = try MetricExporter.new(std.testing.allocator, io, &noop);
     var metric_reader = try MetricReader.init(std.testing.allocator, io, metric_exporter);
@@ -155,9 +153,7 @@ test "metric reader shutdown prevents collect() to execute" {
 
 test "metric reader collects data from meter provider" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();
@@ -206,9 +202,7 @@ fn dropAll(_: Kind) view.Aggregation {
 
 test "metric reader custom temporality and aggregation" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();
@@ -248,9 +242,7 @@ test "metric reader custom temporality and aggregation" {
 
 test "metric reader correctness exporting cumulative temporality" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const mp = try MeterProvider.init(allocator, io);
     defer mp.shutdown();

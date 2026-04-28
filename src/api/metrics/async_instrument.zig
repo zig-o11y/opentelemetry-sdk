@@ -198,9 +198,7 @@ fn testCallback(_: ObservedContext, allocator: std.mem.Allocator) MetricObserveE
 
 test ObservableInstrument {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const instrument = try allocator.create(ObservableInstrument(.ObservableUpDownCounter));
     defer allocator.destroy(instrument);
 
@@ -215,9 +213,7 @@ test "observable instrument with multiple callbacks" {
     const anotherCallback: ObserveMeasures = testCallback;
 
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const instrument = try allocator.create(ObservableInstrument(.ObservableGauge));
     defer allocator.destroy(instrument);
 
@@ -239,9 +235,7 @@ fn testCallbackWithAttrs(_: ObservedContext, allocator: std.mem.Allocator) Metri
 
 test "observable instrument collects data" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const instrument = try allocator.create(ObservableInstrument(.ObservableCounter));
     defer allocator.destroy(instrument);
 
@@ -263,9 +257,7 @@ test "observable instrument collects data" {
 
 test "observable instrument fails to observe callbacks with different data types" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const instrument = try allocator.create(ObservableInstrument(.ObservableCounter));
     defer allocator.destroy(instrument);
 
@@ -283,9 +275,7 @@ test "observable instrument fails to observe callbacks with different data types
 // Hence, we need to ensure that the observable instrument does not fetch duplicate data from multiple callbacks.
 test "observable instrument de-duplicate datapoints when fetching" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
     const instrument = try allocator.create(ObservableInstrument(.ObservableGauge));
     defer allocator.destroy(instrument);
 
@@ -305,9 +295,7 @@ test "observable instrument de-duplicate datapoints when fetching" {
 
 test "observable instrument e2e measurements with context" {
     const allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const request = struct {
         const Self = @This();

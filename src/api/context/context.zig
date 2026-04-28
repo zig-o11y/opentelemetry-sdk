@@ -496,9 +496,7 @@ test "runtime key creation thread safety" {
         barrier: std.Io.Event = .unset,
     };
 
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var shared = SharedData{
         .keys = std.ArrayList(ContextKey).empty,

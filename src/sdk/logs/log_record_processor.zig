@@ -1,6 +1,5 @@
 const std = @import("std");
 const clock = @import("clock");
-const TestRuntime = @import("../../testing.zig").TestRuntime;
 const logs = @import("../../api/logs/logger_provider.zig");
 const context = @import("../../api/context.zig");
 const LogRecordExporter = @import("log_record_exporter.zig").LogRecordExporter;
@@ -388,9 +387,7 @@ pub const BatchingLogRecordProcessor = struct {
 
 test "SimpleLogRecordProcessor basic functionality" {
     const allocator = std.testing.allocator;
-    var rt = TestRuntime.init(allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
 
     // Mock exporter
     const MockExporter = struct {
@@ -485,9 +482,7 @@ test "SimpleLogRecordProcessor basic functionality" {
 
 test "SimpleLogRecordProcessor with attributes" {
     const allocator = std.testing.allocator;
-    var rt = TestRuntime.init(allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
 
     // Mock exporter (simplified for this test)
     const MockExporter = struct {
@@ -537,9 +532,7 @@ test "SimpleLogRecordProcessor with attributes" {
 
 test "BatchingLogRecordProcessor basic functionality" {
     const allocator = std.testing.allocator;
-    var rt = TestRuntime.init(allocator);
-    defer rt.deinit();
-    const io = rt.io();
+    const io = std.testing.io;
 
     // Mock exporter (simplified)
     const MockExporter = struct {
