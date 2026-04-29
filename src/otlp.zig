@@ -8,10 +8,11 @@
 
 const std = @import("std");
 const clock = @import("clock");
-const env = @import("env");
 const http = std.http;
 const Uri = std.Uri;
 const flate = std.compress.flate;
+
+const EnvMap = std.process.Environ.Map;
 
 const log = std.log.scoped(.otlp);
 
@@ -247,8 +248,7 @@ pub const ConfigOptions = struct {
     /// Retrieves the configuration from the environment variables.
     /// The environment variables are prefixed with "OTEL_EXPORTER_OTLP_",
     /// and they take precedence over the values set in the config.
-    /// Pass the "environ" argument with env.createEnvMap().
-    pub fn mergeFromEnvMap(self: *ConfigOptions, environ: *const env.EnvMap) !void {
+    pub fn mergeFromEnvMap(self: *ConfigOptions, environ: *const EnvMap) !void {
         // customize endpoint and URLs
         // Strings from the EnvMap are borrowed — dupe them so they outlive the EnvMap.
         if (entryFromEnvMap(environ, "ENDPOINT")) |endpoint| {
@@ -298,7 +298,7 @@ pub const ConfigOptions = struct {
         self.endpoint_owned = true;
     }
 
-    fn entryFromEnvMap(environ: *const env.EnvMap, varSuffix: []const u8) ?[]const u8 {
+    fn entryFromEnvMap(environ: *const EnvMap, varSuffix: []const u8) ?[]const u8 {
         var env_var_name: [128]u8 = [_]u8{0} ** 128;
         for (env_var_prefix, 0..) |c, i| {
             env_var_name[i] = c;
@@ -330,7 +330,7 @@ pub const ConfigOptions = struct {
 
 test "otlp config from env" {
     const allocator = std.testing.allocator;
-    var map = env.EnvMap.init(allocator);
+    var map = EnvMap.init(allocator);
     defer map.deinit();
     // Set the environment variable to test.
     const new_endpoint: []const u8 = "something:1234";
@@ -399,7 +399,7 @@ test "otlp config from env with URL scheme in endpoint" {
     };
 
     for (cases) |c| {
-        var map = env.EnvMap.init(allocator);
+        var map = EnvMap.init(allocator);
         defer map.deinit();
         try map.put("OTEL_EXPORTER_OTLP_ENDPOINT", c.env);
 
@@ -417,7 +417,7 @@ test "otlp config from env with URL scheme in endpoint" {
 
     // Scheme-only input has no host and must be rejected.
     {
-        var map = env.EnvMap.init(allocator);
+        var map = EnvMap.init(allocator);
         defer map.deinit();
         try map.put("OTEL_EXPORTER_OTLP_ENDPOINT", "http://");
 
@@ -439,7 +439,7 @@ test "otlp config custom endpoint for singals" {
     try std.testing.expectEqualStrings("http://localhost:4318/v1/traces", traces);
     // Assert that some signals' HTTP path can be overridden from env.
 
-    var map = env.EnvMap.init(allocator);
+    var map = EnvMap.init(allocator);
     defer map.deinit();
     try map.put("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "https://another.com:1234/traces");
     try map.put("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "http://metrics-new:1234");
