@@ -35,6 +35,8 @@ fn testMetricsHttpJson(
     defer me.otlp.deinit();
 
     const mr = try metrics_sdk.MetricReader.init(allocator, io, me.exporter);
+    // mr.shutdown() also shuts down me.exporter (the MetricExporter wrapper).
+    defer mr.shutdown();
     try mp.addReader(mr);
 
     const meter = try mp.getMeter(.{ .name = "integration-test-http-json" });
