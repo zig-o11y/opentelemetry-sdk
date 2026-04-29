@@ -14,6 +14,7 @@ pub fn main(init: std.process.Init) !void {
     defer {
         otel.metric_reader.shutdown();
         otel.meter_provider.shutdown();
+        otel.in_memory_exporter.deinit();
     }
 
     const ip = "127.0.0.1";
@@ -27,6 +28,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Send an HTTP request to the server
     var client = http.Client{ .allocator = allocator, .io = io };
+    defer client.deinit();
     const uri = try std.Uri.parse("http://127.0.0.1:4488");
     var req = try client.request(.GET, uri, .{});
     defer req.deinit();
