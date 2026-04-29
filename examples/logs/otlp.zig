@@ -1,7 +1,7 @@
 const std = @import("std");
 const sdk = @import("opentelemetry-sdk");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -25,7 +25,7 @@ pub fn main() !void {
     std.debug.print("OTLP Protocol: {s}\n\n", .{@tagName(otlp_config.protocol)});
 
     // Create OTLP exporter
-    var otlp_exporter = try sdk.logs.OTLPExporter.init(allocator, io, otlp_config);
+    var otlp_exporter = try sdk.logs.OTLPExporter.init(allocator, io, init.environ_map, otlp_config);
     defer otlp_exporter.deinit();
     const exporter = otlp_exporter.asLogRecordExporter();
 

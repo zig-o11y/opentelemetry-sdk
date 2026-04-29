@@ -7,7 +7,7 @@ const otlp = sdk.otlp;
 const otlp_stub = @import("otlp-stub");
 const pbmetrics = @import("opentelemetry-proto").collector_metrics_v1;
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
     defer if (gpa.deinit() == .leak) @panic("leaks detected");
@@ -42,7 +42,7 @@ pub fn main() !void {
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
-    var otel = try setupTelemetry(allocator, io, config);
+    var otel = try setupTelemetry(allocator, io, init.environ_map, config);
     defer otel.meter_provider.shutdown();
     defer otel.otlp_exporter.deinit();
     defer otel.metric_reader.shutdown();
@@ -65,11 +65,16 @@ const OTel = struct {
     otlp_exporter: *metrics_sdk.OTLPExporter,
 };
 
-fn setupTelemetry(allocator: std.mem.Allocator, io: std.Io, opts: *otlp.ConfigOptions) !OTel {
+fn setupTelemetry(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    opts: *otlp.ConfigOptions,
+) !OTel {
     const mp = try metrics_sdk.MeterProvider.init(allocator, io);
     errdefer mp.shutdown();
 
-    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, null, null, opts);
+    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, env_map, null, null, opts);
     errdefer me.otlp.deinit();
 
     const mr = try metrics_sdk.MetricReader.init(allocator, io, me.exporter);
