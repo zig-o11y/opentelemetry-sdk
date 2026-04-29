@@ -31,10 +31,10 @@ fn testPrometheusExporter(allocator: std.mem.Allocator, io: std.Io, port: u16) !
             .include_scope_labels = true,
         },
     });
-    defer result.exporter.shutdown();
     defer result.prometheus.deinit();
 
     const reader = try MetricReader.init(allocator, io, result.exporter);
+    // reader.shutdown() also shuts down the underlying MetricExporter.
     defer reader.shutdown();
     try mp.addReader(reader);
 
