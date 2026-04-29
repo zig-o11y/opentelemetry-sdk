@@ -642,18 +642,21 @@ test "Configuration.initFromEnv - defaults" {
 test "Configuration.initFromEnv - custom values" {
     const allocator = std.testing.allocator;
 
-    var test_env = EnvMap.init(allocator);
-    defer test_env.deinit();
+    var env_map = EnvMap.init(allocator);
+    defer env_map.deinit();
 
-    try test_env.put("OTEL_SDK_DISABLED", "false");
-    try test_env.put("OTEL_SERVICE_NAME", "test-service");
-    try test_env.put("OTEL_LOG_LEVEL", "debug");
-    try test_env.put("OTEL_TRACES_SAMPLER", "always_on");
+    try env_map.put("OTEL_SDK_DISABLED", "false");
+    try env_map.put("OTEL_SERVICE_NAME", "test-service");
+    try env_map.put("OTEL_LOG_LEVEL", "debug");
+    try env_map.put("OTEL_TRACES_SAMPLER", "always_on");
 
-    var trace_config = try TraceConfig.fromEnv(&test_env, allocator);
-    defer trace_config.deinit(allocator);
+    var config = try Configuration.initFromEnv(allocator, &env_map);
+    defer config.deinit();
 
-    try std.testing.expectEqual(TraceConfig.Sampler.always_on, trace_config.sampler);
+    try std.testing.expectEqual(false, config.sdk_disabled);
+    try std.testing.expectEqualStrings("test-service", config.service_name.?);
+    try std.testing.expectEqual(LogLevel.debug, config.log_level);
+    try std.testing.expectEqual(TraceConfig.Sampler.always_on, config.trace_config.sampler);
 }
 
 test Configuration {
