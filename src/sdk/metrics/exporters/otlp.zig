@@ -2,9 +2,10 @@
 
 const std = @import("std");
 const clock = @import("clock");
-const env = @import("env");
 
 const log = std.log.scoped(.otlp_exporter);
+
+const EnvMap = std.process.Environ.Map;
 
 const Attribute = @import("../../../attributes.zig").Attribute;
 const Attributes = @import("../../../attributes.zig").Attributes;
@@ -48,10 +49,14 @@ pub const OTLPExporter = struct {
     temporality: view.TemporalitySelector,
     config: *otlp.ConfigOptions,
 
-    pub fn init(allocator: std.mem.Allocator, io: std.Io, config: *otlp.ConfigOptions, temporality: view.TemporalitySelector) !*Self {
-        var env_map = try env.createEnvMap(allocator);
-        defer env_map.deinit();
-        try config.mergeFromEnvMap(&env_map);
+    pub fn init(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        env_map: *const EnvMap,
+        config: *otlp.ConfigOptions,
+        temporality: view.TemporalitySelector,
+    ) !*Self {
+        try config.mergeFromEnvMap(env_map);
 
         const s = try allocator.create(Self);
         s.* = Self{
@@ -479,6 +484,9 @@ test "exporters/otlp init/deinit" {
     const config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
-    var exporter = try OTLPExporter.init(allocator, io, config, view.DefaultTemporality);
+    var env_map = EnvMap.init(allocator);
+    defer env_map.deinit();
+
+    var exporter = try OTLPExporter.init(allocator, io, &env_map, config, view.DefaultTemporality);
     defer exporter.deinit();
 }

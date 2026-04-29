@@ -1,9 +1,10 @@
 const std = @import("std");
-const env = @import("env");
 const logs = @import("../../../api/logs/logger_provider.zig");
 const LogRecordExporter = @import("../log_record_exporter.zig").LogRecordExporter;
 const otlp = @import("../../../otlp.zig");
 const attribute = @import("../../../attributes.zig");
+
+const EnvMap = std.process.Environ.Map;
 
 const proto = @import("opentelemetry-proto");
 const pblogs = proto.logs_v1;
@@ -31,10 +32,15 @@ pub const OTLPExporter = struct {
     /// Initialize a new OTLP exporter with the given allocator and configuration.
     /// The config should be initialized with otlp.ConfigOptions.init() and supports
     /// environment variable configuration for endpoint, headers, compression, etc.
-    pub fn init(allocator: std.mem.Allocator, io: std.Io, config: *otlp.ConfigOptions) !*Self {
-        var env_map = try env.createEnvMap(allocator);
-        defer env_map.deinit();
-        try config.mergeFromEnvMap(&env_map);
+    /// Pass `env_map` to read OTEL_EXPORTER_OTLP_* overrides; pass an empty map
+    /// to ignore the environment.
+    pub fn init(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        env_map: *const EnvMap,
+        config: *otlp.ConfigOptions,
+    ) !*Self {
+        try config.mergeFromEnvMap(env_map);
 
         const self = try allocator.create(Self);
         self.* = Self{
@@ -297,7 +303,10 @@ test "OTLPExporter basic initialization" {
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
-    var exporter = try OTLPExporter.init(allocator, io, config);
+    var env_map = EnvMap.init(allocator);
+    defer env_map.deinit();
+
+    var exporter = try OTLPExporter.init(allocator, io, &env_map, config);
     defer exporter.deinit();
 
     const log_exporter = exporter.asLogRecordExporter();
@@ -386,7 +395,10 @@ test "Log record to OTLP conversion with all fields" {
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
-    var exporter = try OTLPExporter.init(allocator, io, config);
+    var env_map = EnvMap.init(allocator);
+    defer env_map.deinit();
+
+    var exporter = try OTLPExporter.init(allocator, io, &env_map, config);
     defer exporter.deinit();
 
     // Create a complete log record
@@ -435,7 +447,10 @@ test "Log records grouped by instrumentation scope" {
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
-    var exporter = try OTLPExporter.init(allocator, io, config);
+    var env_map = EnvMap.init(allocator);
+    defer env_map.deinit();
+
+    var exporter = try OTLPExporter.init(allocator, io, &env_map, config);
     defer exporter.deinit();
 
     // Create log records with different scopes
@@ -523,7 +538,10 @@ test "Resource attributes in OTLP export" {
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
-    var exporter = try OTLPExporter.init(allocator, io, config);
+    var env_map = EnvMap.init(allocator);
+    defer env_map.deinit();
+
+    var exporter = try OTLPExporter.init(allocator, io, &env_map, config);
     defer exporter.deinit();
 
     const scope = InstrumentationScope{ .name = "test-logger" };
@@ -572,7 +590,10 @@ test "Trace context hex conversion" {
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
-    var exporter = try OTLPExporter.init(allocator, io, config);
+    var env_map = EnvMap.init(allocator);
+    defer env_map.deinit();
+
+    var exporter = try OTLPExporter.init(allocator, io, &env_map, config);
     defer exporter.deinit();
 
     const scope = InstrumentationScope{ .name = "test-logger" };
@@ -611,7 +632,10 @@ test "Memory cleanup verification" {
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
-    var exporter = try OTLPExporter.init(allocator, io, config);
+    var env_map = EnvMap.init(allocator);
+    defer env_map.deinit();
+
+    var exporter = try OTLPExporter.init(allocator, io, &env_map, config);
     defer exporter.deinit();
 
     const scope = InstrumentationScope{ .name = "test-logger" };

@@ -23,6 +23,8 @@ const otlp = @import("../../otlp.zig");
 
 const view = @import("view.zig");
 
+const EnvMap = std.process.Environ.Map;
+
 pub const ExportResult = enum {
     Success,
     Failure,
@@ -108,13 +110,14 @@ pub const MetricExporter = struct {
     pub fn OTLP(
         allocator: std.mem.Allocator,
         io: std.Io,
+        env_map: *const EnvMap,
         temporality: ?view.TemporalitySelector,
         aggregation: ?view.AggregationSelector,
         options: *otlp.ConfigOptions,
     ) !struct { exporter: *MetricExporter, otlp: *OTLPExporter } {
         const temporality_ = temporality orelse view.DefaultTemporality;
 
-        const otlp_exporter = try OTLPExporter.init(allocator, io, options, temporality_);
+        const otlp_exporter = try OTLPExporter.init(allocator, io, env_map, options, temporality_);
         const exporter = try MetricExporter.new(allocator, io, &otlp_exporter.exporter);
         // Default configuration
         exporter.temporality = temporality_;

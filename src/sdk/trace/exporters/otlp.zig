@@ -1,8 +1,9 @@
 const std = @import("std");
-const env = @import("env");
 const trace = @import("../../../api/trace.zig");
 const SpanExporter = @import("../span_exporter.zig").SpanExporter;
 const otlp = @import("../../../otlp.zig");
+
+const EnvMap = std.process.Environ.Map;
 
 const attribute = @import("../../../attributes.zig");
 
@@ -22,10 +23,13 @@ pub const OTLPExporter = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, io: std.Io, config: *otlp.ConfigOptions) !*Self {
-        var env_map = try env.createEnvMap(allocator);
-        defer env_map.deinit();
-        try config.mergeFromEnvMap(&env_map);
+    pub fn init(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        env_map: *const EnvMap,
+        config: *otlp.ConfigOptions,
+    ) !*Self {
+        try config.mergeFromEnvMap(env_map);
 
         const self = try allocator.create(Self);
         self.* = Self{
@@ -311,7 +315,10 @@ test "OTLPExporter with InstrumentationScope" {
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
-    var exporter = try OTLPExporter.init(allocator, io, config);
+    var env_map = EnvMap.init(allocator);
+    defer env_map.deinit();
+
+    var exporter = try OTLPExporter.init(allocator, io, &env_map, config);
     defer exporter.deinit();
 
     // Create test spans with different scopes
@@ -381,8 +388,14 @@ test "OTLPExporter basic functionality" {
 
     var config = try otlp.ConfigOptions.init(allocator);
     defer config.deinit();
+    // Point to an unreachable endpoint so the export deterministically fails
+    // with ConnectionRefused.
+    config.endpoint = "127.0.0.1:1";
 
-    var exporter = try OTLPExporter.init(allocator, io, config);
+    var env_map = EnvMap.init(allocator);
+    defer env_map.deinit();
+
+    var exporter = try OTLPExporter.init(allocator, io, &env_map, config);
     defer exporter.deinit();
 
     const span_exporter = exporter.asSpanExporter();
