@@ -6,19 +6,9 @@ const MeterProvider = metrics_sdk.MeterProvider;
 const MetricExporter = metrics_sdk.MetricExporter;
 const MetricReader = metrics_sdk.MetricReader;
 
-pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer {
-        const leaked = gpa.deinit();
-        if (leaked == .leak) {
-            std.log.err("Memory leak detected!", .{});
-        }
-    }
-    const allocator = gpa.allocator();
-
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     std.log.info("Starting Prometheus exporter integration test...", .{});
 
