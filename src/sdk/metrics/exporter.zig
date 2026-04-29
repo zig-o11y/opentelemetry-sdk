@@ -117,7 +117,7 @@ pub const MetricExporter = struct {
     ) !struct { exporter: *MetricExporter, otlp: *OTLPExporter } {
         const temporality_ = temporality orelse view.DefaultTemporality;
 
-        const otlp_exporter = try OTLPExporter.init(allocator, io, env_map, options, temporality_);
+        const otlp_exporter = try OTLPExporter.init(allocator, io, env_map, temporality_, options);
         const exporter = try MetricExporter.new(allocator, io, &otlp_exporter.exporter);
         // Default configuration
         exporter.temporality = temporality_;

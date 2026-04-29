@@ -53,8 +53,8 @@ pub const OTLPExporter = struct {
         allocator: std.mem.Allocator,
         io: std.Io,
         env_map: *const EnvMap,
-        config: *otlp.ConfigOptions,
         temporality: view.TemporalitySelector,
+        config: *otlp.ConfigOptions,
     ) !*Self {
         try config.mergeFromEnvMap(env_map);
 
@@ -487,6 +487,6 @@ test "exporters/otlp init/deinit" {
     var env_map = EnvMap.init(allocator);
     defer env_map.deinit();
 
-    var exporter = try OTLPExporter.init(allocator, io, &env_map, config, view.DefaultTemporality);
+    var exporter = try OTLPExporter.init(allocator, io, &env_map, view.DefaultTemporality, config);
     defer exporter.deinit();
 }
