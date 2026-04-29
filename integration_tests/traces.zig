@@ -5,7 +5,7 @@ const trace_sdk = sdk.trace;
 const trace_api = sdk.api.trace;
 const common = @import("common.zig");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const allocator = std.heap.page_allocator;
 
     var threaded: std.Io.Threaded = .init(allocator, .{});
@@ -16,15 +16,20 @@ pub fn main() !void {
     defer common.cleanupTestContext(&ctx, io);
 
     std.debug.print("Running traces integration test...\n", .{});
-    try testTraces(allocator, io, ctx.tmp_dir);
+    try testTraces(allocator, io, init.environ_map, ctx.tmp_dir);
     std.debug.print("✓ Traces test passed\n\n", .{});
 
     std.debug.print("Running traces compression test...\n", .{});
-    try testTracesWithCompression(allocator, io, ctx.tmp_dir);
+    try testTracesWithCompression(allocator, io, init.environ_map, ctx.tmp_dir);
     std.debug.print("✓ Traces compression test passed\n\n", .{});
 }
 
-fn testTraces(allocator: std.mem.Allocator, io: std.Io, tmp_dir: std.Io.Dir) !void {
+fn testTraces(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    tmp_dir: std.Io.Dir,
+) !void {
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
@@ -38,7 +43,7 @@ fn testTraces(allocator: std.mem.Allocator, io: std.Io, tmp_dir: std.Io.Dir) !vo
     var tracer_provider = try trace_sdk.TracerProvider.init(allocator, io, id_generator);
     errdefer tracer_provider.shutdown();
 
-    var otlp_exporter = try trace_sdk.OTLPExporter.init(allocator, io, config);
+    var otlp_exporter = try trace_sdk.OTLPExporter.init(allocator, io, env_map, config);
     errdefer otlp_exporter.deinit();
 
     var simple_processor = trace_sdk.SimpleProcessor.init(
@@ -108,7 +113,12 @@ fn testTraces(allocator: std.mem.Allocator, io: std.Io, tmp_dir: std.Io.Dir) !vo
     otlp_exporter.deinit();
 }
 
-fn testTracesWithCompression(allocator: std.mem.Allocator, io: std.Io, tmp_dir: std.Io.Dir) !void {
+fn testTracesWithCompression(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    tmp_dir: std.Io.Dir,
+) !void {
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
@@ -123,7 +133,7 @@ fn testTracesWithCompression(allocator: std.mem.Allocator, io: std.Io, tmp_dir: 
     var tracer_provider = try trace_sdk.TracerProvider.init(allocator, io, id_generator);
     errdefer tracer_provider.shutdown();
 
-    var otlp_exporter = try trace_sdk.OTLPExporter.init(allocator, io, config);
+    var otlp_exporter = try trace_sdk.OTLPExporter.init(allocator, io, env_map, config);
     errdefer otlp_exporter.deinit();
 
     var simple_processor = trace_sdk.SimpleProcessor.init(

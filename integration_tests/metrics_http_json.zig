@@ -4,7 +4,7 @@ const sdk = @import("opentelemetry-sdk");
 const metrics_sdk = sdk.metrics;
 const common = @import("common.zig");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const allocator = std.heap.page_allocator;
 
     var threaded: std.Io.Threaded = .init(allocator, .{});
@@ -15,11 +15,16 @@ pub fn main() !void {
     defer common.cleanupTestContext(&ctx, io);
 
     std.debug.print("Running metrics http/json integration test...\n", .{});
-    try testMetricsHttpJson(allocator, io, ctx.tmp_dir);
+    try testMetricsHttpJson(allocator, io, init.environ_map, ctx.tmp_dir);
     std.debug.print("✓ Metrics http/json test passed\n\n", .{});
 }
 
-fn testMetricsHttpJson(allocator: std.mem.Allocator, io: std.Io, tmp_dir: std.Io.Dir) !void {
+fn testMetricsHttpJson(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    tmp_dir: std.Io.Dir,
+) !void {
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
@@ -29,7 +34,7 @@ fn testMetricsHttpJson(allocator: std.mem.Allocator, io: std.Io, tmp_dir: std.Io
     const mp = try metrics_sdk.MeterProvider.init(allocator, io);
     defer mp.shutdown();
 
-    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, null, null, config);
+    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, env_map, null, null, config);
     defer me.otlp.deinit();
 
     const mr = try metrics_sdk.MetricReader.init(allocator, io, me.exporter);

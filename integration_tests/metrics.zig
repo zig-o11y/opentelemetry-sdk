@@ -4,7 +4,7 @@ const sdk = @import("opentelemetry-sdk");
 const metrics_sdk = sdk.metrics;
 const common = @import("common.zig");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const allocator = std.heap.page_allocator;
 
     var threaded: std.Io.Threaded = .init(allocator, .{});
@@ -15,15 +15,20 @@ pub fn main() !void {
     defer common.cleanupTestContext(&ctx, io);
 
     std.debug.print("Running metrics integration test...\n", .{});
-    try testMetrics(allocator, io, ctx.tmp_dir);
+    try testMetrics(allocator, io, init.environ_map, ctx.tmp_dir);
     std.debug.print("✓ Metrics test passed\n\n", .{});
 
     std.debug.print("Running metrics compression test...\n", .{});
-    try testMetricsWithCompression(allocator, io, ctx.tmp_dir);
+    try testMetricsWithCompression(allocator, io, init.environ_map, ctx.tmp_dir);
     std.debug.print("✓ Metrics compression test passed\n\n", .{});
 }
 
-fn testMetrics(allocator: std.mem.Allocator, io: std.Io, tmp_dir: std.Io.Dir) !void {
+fn testMetrics(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    tmp_dir: std.Io.Dir,
+) !void {
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
@@ -32,7 +37,7 @@ fn testMetrics(allocator: std.mem.Allocator, io: std.Io, tmp_dir: std.Io.Dir) !v
     const mp = try metrics_sdk.MeterProvider.init(allocator, io);
     defer mp.shutdown();
 
-    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, null, null, config);
+    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, env_map, null, null, config);
     defer me.otlp.deinit();
 
     const mr = try metrics_sdk.MetricReader.init(allocator, io, me.exporter);
@@ -71,7 +76,12 @@ fn testMetrics(allocator: std.mem.Allocator, io: std.Io, tmp_dir: std.Io.Dir) !v
     std.debug.print("  ✓ Metrics JSON validated - found 'test_counter' metric\n", .{});
 }
 
-fn testMetricsWithCompression(allocator: std.mem.Allocator, io: std.Io, tmp_dir: std.Io.Dir) !void {
+fn testMetricsWithCompression(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    env_map: *const std.process.Environ.Map,
+    tmp_dir: std.Io.Dir,
+) !void {
     var config = try sdk.otlp.ConfigOptions.init(allocator);
     defer config.deinit();
 
@@ -81,7 +91,7 @@ fn testMetricsWithCompression(allocator: std.mem.Allocator, io: std.Io, tmp_dir:
     const mp = try metrics_sdk.MeterProvider.init(allocator, io);
     defer mp.shutdown();
 
-    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, null, null, config);
+    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, env_map, null, null, config);
     defer me.otlp.deinit();
 
     const mr = try metrics_sdk.MetricReader.init(allocator, io, me.exporter);
