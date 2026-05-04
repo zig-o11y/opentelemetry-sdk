@@ -160,7 +160,7 @@ pub fn createGlobalPropagator(
 ) !CompositePropagator {
     const config = Configuration.get() orelse blk: {
         // No global config exists, create and set one
-        const new_config = try Configuration.initFromEnv(allocator, env_map);
+        const new_config = try Configuration.init(allocator, env_map);
         Configuration.set(new_config);
         break :blk new_config;
     };

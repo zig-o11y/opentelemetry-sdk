@@ -356,7 +356,7 @@ test "meter provider with config from environment" {
     var env_map = std.process.Environ.Map.init(std.testing.allocator);
     defer env_map.deinit();
 
-    const cfg = try Configuration.initFromEnv(std.testing.allocator, &env_map);
+    const cfg = try Configuration.init(std.testing.allocator, &env_map);
     defer cfg.deinit();
     Configuration.set(cfg);
 

@@ -300,7 +300,9 @@ pub fn set(cfg: *Configuration) void {
     Instance.store(cfg, .release);
 }
 
-fn fromMap(allocator: std.mem.Allocator, env_map: *const EnvMap) !*Configuration {
+/// Initialize configuration from the supplied environment map.
+/// Caller owns the returned Configuration instance and must call deinit() when done.
+pub fn init(allocator: std.mem.Allocator, env_map: *const EnvMap) !*Configuration {
     const cfg = try allocator.create(Configuration);
 
     cfg.* = Configuration{
@@ -324,12 +326,6 @@ fn fromMap(allocator: std.mem.Allocator, env_map: *const EnvMap) !*Configuration
         .logs_config = try LogsConfig.fromEnv(env_map, allocator),
     };
     return cfg;
-}
-
-/// Initialize configuration from the supplied environment map.
-/// Caller owns the returned Configuration instance and must call deinit() when done.
-pub fn initFromEnv(allocator: std.mem.Allocator, env_map: *const EnvMap) !*Configuration {
-    return try fromMap(allocator, env_map);
 }
 
 /// Deinitialize and destroy the Configuration (for heap-allocated instances).
@@ -624,13 +620,13 @@ test "LogsConfig.fromEnv - custom values" {
     try std.testing.expectEqual(@as(u32, 1024), config.blrp_max_queue_size);
 }
 
-test "Configuration.initFromEnv - defaults" {
+test "Configuration.init - defaults" {
     const allocator = std.testing.allocator;
 
     var env_map = EnvMap.init(allocator);
     defer env_map.deinit();
 
-    var config = try Configuration.initFromEnv(allocator, &env_map);
+    var config = try Configuration.init(allocator, &env_map);
     defer config.deinit();
 
     try std.testing.expectEqual(false, config.sdk_disabled);
@@ -639,7 +635,7 @@ test "Configuration.initFromEnv - defaults" {
     try std.testing.expectEqual(@as(usize, 2), config.trace_propagators.len);
 }
 
-test "Configuration.initFromEnv - custom values" {
+test "Configuration.init - custom values" {
     const allocator = std.testing.allocator;
 
     var env_map = EnvMap.init(allocator);
@@ -650,7 +646,7 @@ test "Configuration.initFromEnv - custom values" {
     try env_map.put("OTEL_LOG_LEVEL", "debug");
     try env_map.put("OTEL_TRACES_SAMPLER", "always_on");
 
-    var config = try Configuration.initFromEnv(allocator, &env_map);
+    var config = try Configuration.init(allocator, &env_map);
     defer config.deinit();
 
     try std.testing.expectEqual(false, config.sdk_disabled);
@@ -664,7 +660,7 @@ test Configuration {
     var env_map = EnvMap.init(allocator);
     defer env_map.deinit();
 
-    var config = try Configuration.initFromEnv(allocator, &env_map);
+    var config = try Configuration.init(allocator, &env_map);
     defer config.deinit();
 
     Configuration.set(config);
@@ -683,7 +679,7 @@ test "Configuration OTEL_SERVICE_NAME default is unknown_service" {
     var env_map = EnvMap.init(allocator);
     defer env_map.deinit();
 
-    const config = try Configuration.fromMap(allocator, &env_map);
+    const config = try Configuration.init(allocator, &env_map);
     defer config.deinit();
 
     try std.testing.expectEqualStrings("unknown_service", config.service_name.?);
@@ -704,7 +700,7 @@ test "Configuration TracerProvider with SDK disabled" {
     try testMap.put("OTEL_SDK_DISABLED", "true");
 
     // Create configuration with SDK disabled
-    var config_from_env = try Configuration.fromMap(allocator, &testMap);
+    var config_from_env = try Configuration.init(allocator, &testMap);
     defer config_from_env.deinit();
     Configuration.set(config_from_env);
 
@@ -740,7 +736,7 @@ test "ConfigurationMeterProvider with SDK disabled" {
     defer env_map.deinit();
 
     // Create configuration with SDK disabled
-    var config_from_env = try Configuration.initFromEnv(allocator, &env_map);
+    var config_from_env = try Configuration.init(allocator, &env_map);
     defer config_from_env.deinit();
 
     config_from_env.sdk_disabled = true;
@@ -768,7 +764,7 @@ test "Configuration LoggerProvider with SDK disabled" {
     defer env_map.deinit();
 
     // Create configuration with SDK disabled
-    var config_from_env = try Configuration.initFromEnv(allocator, &env_map);
+    var config_from_env = try Configuration.init(allocator, &env_map);
     defer config_from_env.deinit();
 
     config_from_env.sdk_disabled = true;
@@ -804,7 +800,7 @@ test "Configuration SDK disabled with OTEL_SDK_DISABLED=false" {
     defer env_map.deinit();
 
     // Create configuration with SDK explicitly enabled
-    var config_from_env = try Configuration.initFromEnv(allocator, &env_map);
+    var config_from_env = try Configuration.init(allocator, &env_map);
     defer config_from_env.deinit();
 
     config_from_env.sdk_disabled = false;
@@ -839,7 +835,7 @@ test "Configuration SDK disabled by default is false" {
     defer env_map.deinit();
 
     // Don't set OTEL_SDK_DISABLED - should default to false
-    var config_from_env = try Configuration.initFromEnv(allocator, &env_map);
+    var config_from_env = try Configuration.init(allocator, &env_map);
     defer config_from_env.deinit();
 
     // Verify SDK is enabled by default
