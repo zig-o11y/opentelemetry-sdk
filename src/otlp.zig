@@ -204,7 +204,7 @@ pub const ConfigOptions = struct {
     // Custom signal URLS are used to override the default endpoint + path concat logic for each signals.
     // They should be populated by the user, but they can also be filled in
     // when parsing the config from environment variables.
-    custom_signal_urls: std.AutoHashMap(Signal, []const u8),
+    custom_signal_urls: std.AutoHashMapUnmanaged(Signal, []const u8) = .empty,
 
     retryConfig: ExpBackoffconfig = .{},
 
@@ -213,12 +213,10 @@ pub const ConfigOptions = struct {
 
     pub fn init(allocator: std.mem.Allocator, env_map: *const EnvMap) !*ConfigOptions {
         const s = try allocator.create(ConfigOptions);
-        errdefer allocator.destroy(s);
         s.* = ConfigOptions{
             .allocator = allocator,
-            .custom_signal_urls = std.AutoHashMap(Signal, []const u8).init(allocator),
         };
-        errdefer s.custom_signal_urls.deinit();
+        errdefer s.deinit();
         try s.mergeFromEnvMap(env_map);
         return s;
     }
@@ -227,7 +225,7 @@ pub const ConfigOptions = struct {
         if (self.endpoint_owned) self.allocator.free(self.endpoint);
         var it = self.custom_signal_urls.valueIterator();
         while (it.next()) |v| self.allocator.free(v.*);
-        self.custom_signal_urls.deinit();
+        self.custom_signal_urls.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -255,15 +253,15 @@ pub const ConfigOptions = struct {
         }
         if (entryFromEnvMap(environ, "TRACES_ENDPOINT")) |traces| {
             const owned = try self.allocator.dupe(u8, traces);
-            if (try self.custom_signal_urls.fetchPut(Signal.traces, owned)) |old| self.allocator.free(old.value);
+            if (try self.custom_signal_urls.fetchPut(self.allocator, Signal.traces, owned)) |old| self.allocator.free(old.value);
         }
         if (entryFromEnvMap(environ, "METRICS_ENDPOINT")) |metrics| {
             const owned = try self.allocator.dupe(u8, metrics);
-            if (try self.custom_signal_urls.fetchPut(Signal.metrics, owned)) |old| self.allocator.free(old.value);
+            if (try self.custom_signal_urls.fetchPut(self.allocator, Signal.metrics, owned)) |old| self.allocator.free(old.value);
         }
         if (entryFromEnvMap(environ, "LOGS_ENDPOINT")) |logs| {
             const owned = try self.allocator.dupe(u8, logs);
-            if (try self.custom_signal_urls.fetchPut(Signal.logs, owned)) |old| self.allocator.free(old.value);
+            if (try self.custom_signal_urls.fetchPut(self.allocator, Signal.logs, owned)) |old| self.allocator.free(old.value);
         }
         // connection configs
         if (entryFromEnvMap(environ, "COMPRESSION")) |compression| {
