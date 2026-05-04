@@ -30,7 +30,7 @@ fn testTraces(
     env_map: *const std.process.Environ.Map,
     tmp_dir: std.Io.Dir,
 ) !void {
-    var config = try sdk.otlp.ConfigOptions.init(allocator);
+    var config = try sdk.otlp.ConfigOptions.init(allocator, env_map);
     defer config.deinit();
 
     config.endpoint = "localhost:" ++ common.COLLECTOR_HTTP_PORT;
@@ -43,7 +43,7 @@ fn testTraces(
     var tracer_provider = try trace_sdk.TracerProvider.init(allocator, io, id_generator);
     errdefer tracer_provider.shutdown();
 
-    var otlp_exporter = try trace_sdk.OTLPExporter.init(allocator, io, env_map, config);
+    var otlp_exporter = try trace_sdk.OTLPExporter.init(allocator, io, config);
     errdefer otlp_exporter.deinit();
 
     var simple_processor = trace_sdk.SimpleProcessor.init(
@@ -119,7 +119,7 @@ fn testTracesWithCompression(
     env_map: *const std.process.Environ.Map,
     tmp_dir: std.Io.Dir,
 ) !void {
-    var config = try sdk.otlp.ConfigOptions.init(allocator);
+    var config = try sdk.otlp.ConfigOptions.init(allocator, env_map);
     defer config.deinit();
 
     config.endpoint = "localhost:" ++ common.COLLECTOR_HTTP_PORT;
@@ -133,7 +133,7 @@ fn testTracesWithCompression(
     var tracer_provider = try trace_sdk.TracerProvider.init(allocator, io, id_generator);
     errdefer tracer_provider.shutdown();
 
-    var otlp_exporter = try trace_sdk.OTLPExporter.init(allocator, io, env_map, config);
+    var otlp_exporter = try trace_sdk.OTLPExporter.init(allocator, io, config);
     errdefer otlp_exporter.deinit();
 
     var simple_processor = trace_sdk.SimpleProcessor.init(

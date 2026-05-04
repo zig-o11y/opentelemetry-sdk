@@ -18,14 +18,14 @@ pub fn main(init: std.process.Init) !void {
     // - OTEL_EXPORTER_OTLP_LOGS_ENDPOINT (logs-specific override)
     // - OTEL_EXPORTER_OTLP_HEADERS (custom headers)
     // - OTEL_EXPORTER_OTLP_COMPRESSION (gzip compression)
-    var otlp_config = try sdk.otlp.ConfigOptions.init(allocator);
+    var otlp_config = try sdk.otlp.ConfigOptions.init(allocator, init.environ_map);
     defer otlp_config.deinit();
 
     std.debug.print("OTLP Endpoint: {s}\n", .{otlp_config.endpoint});
     std.debug.print("OTLP Protocol: {s}\n\n", .{@tagName(otlp_config.protocol)});
 
     // Create OTLP exporter
-    var otlp_exporter = try sdk.logs.OTLPExporter.init(allocator, io, init.environ_map, otlp_config);
+    var otlp_exporter = try sdk.logs.OTLPExporter.init(allocator, io, otlp_config);
     defer otlp_exporter.deinit();
     const exporter = otlp_exporter.asLogRecordExporter();
 

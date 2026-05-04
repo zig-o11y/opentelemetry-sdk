@@ -29,12 +29,12 @@ fn testLogs(
     env_map: *const std.process.Environ.Map,
     tmp_dir: std.Io.Dir,
 ) !void {
-    var config = try sdk.otlp.ConfigOptions.init(allocator);
+    var config = try sdk.otlp.ConfigOptions.init(allocator, env_map);
     defer config.deinit();
 
     config.endpoint = "localhost:" ++ common.COLLECTOR_HTTP_PORT;
 
-    var otlp_exporter = try logs_sdk.OTLPExporter.init(allocator, io, env_map, config);
+    var otlp_exporter = try logs_sdk.OTLPExporter.init(allocator, io, config);
     defer otlp_exporter.deinit();
     const exporter = otlp_exporter.asLogRecordExporter();
 
@@ -103,13 +103,13 @@ fn testLogsWithCompression(
     env_map: *const std.process.Environ.Map,
     tmp_dir: std.Io.Dir,
 ) !void {
-    var config = try sdk.otlp.ConfigOptions.init(allocator);
+    var config = try sdk.otlp.ConfigOptions.init(allocator, env_map);
     defer config.deinit();
 
     config.endpoint = "localhost:" ++ common.COLLECTOR_HTTP_PORT;
     config.compression = .gzip;
 
-    var otlp_exporter = try logs_sdk.OTLPExporter.init(allocator, io, env_map, config);
+    var otlp_exporter = try logs_sdk.OTLPExporter.init(allocator, io, config);
     defer otlp_exporter.deinit();
     const exporter = otlp_exporter.asLogRecordExporter();
 

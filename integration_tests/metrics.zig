@@ -29,7 +29,7 @@ fn testMetrics(
     env_map: *const std.process.Environ.Map,
     tmp_dir: std.Io.Dir,
 ) !void {
-    var config = try sdk.otlp.ConfigOptions.init(allocator);
+    var config = try sdk.otlp.ConfigOptions.init(allocator, env_map);
     defer config.deinit();
 
     config.endpoint = "localhost:" ++ common.COLLECTOR_HTTP_PORT;
@@ -37,7 +37,7 @@ fn testMetrics(
     const mp = try metrics_sdk.MeterProvider.init(allocator, io);
     defer mp.shutdown();
 
-    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, env_map, null, null, config);
+    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, null, null, config);
     defer me.otlp.deinit();
 
     const mr = try metrics_sdk.MetricReader.init(allocator, io, me.exporter);
@@ -82,7 +82,7 @@ fn testMetricsWithCompression(
     env_map: *const std.process.Environ.Map,
     tmp_dir: std.Io.Dir,
 ) !void {
-    var config = try sdk.otlp.ConfigOptions.init(allocator);
+    var config = try sdk.otlp.ConfigOptions.init(allocator, env_map);
     defer config.deinit();
 
     config.endpoint = "localhost:" ++ common.COLLECTOR_HTTP_PORT;
@@ -91,7 +91,7 @@ fn testMetricsWithCompression(
     const mp = try metrics_sdk.MeterProvider.init(allocator, io);
     defer mp.shutdown();
 
-    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, env_map, null, null, config);
+    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, null, null, config);
     defer me.otlp.deinit();
 
     const mr = try metrics_sdk.MetricReader.init(allocator, io, me.exporter);

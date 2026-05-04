@@ -39,10 +39,10 @@ pub fn main(init: std.process.Init) !void {
     defer thread.join();
 
     // Configure the OTLP exporter to use the stub server
-    var config = try sdk.otlp.ConfigOptions.init(allocator);
+    var config = try sdk.otlp.ConfigOptions.init(allocator, init.environ_map);
     defer config.deinit();
 
-    var otel = try setupTelemetry(allocator, io, init.environ_map, config);
+    var otel = try setupTelemetry(allocator, io, config);
     defer otel.meter_provider.shutdown();
     defer otel.otlp_exporter.deinit();
     defer otel.metric_reader.shutdown();
@@ -68,13 +68,12 @@ const OTel = struct {
 fn setupTelemetry(
     allocator: std.mem.Allocator,
     io: std.Io,
-    env_map: *const std.process.Environ.Map,
     opts: *otlp.ConfigOptions,
 ) !OTel {
     const mp = try metrics_sdk.MeterProvider.init(allocator, io);
     errdefer mp.shutdown();
 
-    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, env_map, null, null, opts);
+    const me = try metrics_sdk.MetricExporter.OTLP(allocator, io, null, null, opts);
     errdefer me.otlp.deinit();
 
     const mr = try metrics_sdk.MetricReader.init(allocator, io, me.exporter);
