@@ -3,8 +3,6 @@ const trace = @import("../../../api/trace.zig");
 const SpanExporter = @import("../span_exporter.zig").SpanExporter;
 const otlp = @import("../../../otlp.zig");
 
-const EnvMap = std.process.Environ.Map;
-
 const attribute = @import("../../../attributes.zig");
 
 const proto = @import("opentelemetry-proto");
@@ -26,11 +24,8 @@ pub const OTLPExporter = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         io: std.Io,
-        env_map: *const EnvMap,
         config: *otlp.ConfigOptions,
     ) !*Self {
-        try config.mergeFromEnvMap(env_map);
-
         const self = try allocator.create(Self);
         self.* = Self{
             .allocator = allocator,
@@ -312,13 +307,13 @@ test "OTLPExporter with InstrumentationScope" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
-    var config = try otlp.ConfigOptions.init(allocator);
-    defer config.deinit();
-
-    var env_map = EnvMap.init(allocator);
+    var env_map = std.process.Environ.Map.init(allocator);
     defer env_map.deinit();
 
-    var exporter = try OTLPExporter.init(allocator, io, &env_map, config);
+    var config = try otlp.ConfigOptions.init(allocator, &env_map);
+    defer config.deinit();
+
+    var exporter = try OTLPExporter.init(allocator, io, config);
     defer exporter.deinit();
 
     // Create test spans with different scopes
@@ -386,16 +381,16 @@ test "OTLPExporter basic functionality" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
-    var config = try otlp.ConfigOptions.init(allocator);
+    var env_map = std.process.Environ.Map.init(allocator);
+    defer env_map.deinit();
+
+    var config = try otlp.ConfigOptions.init(allocator, &env_map);
     defer config.deinit();
     // Point to an unreachable endpoint so the export deterministically fails
     // with ConnectionRefused.
     config.endpoint = "127.0.0.1:1";
 
-    var env_map = EnvMap.init(allocator);
-    defer env_map.deinit();
-
-    var exporter = try OTLPExporter.init(allocator, io, &env_map, config);
+    var exporter = try OTLPExporter.init(allocator, io, config);
     defer exporter.deinit();
 
     const span_exporter = exporter.asSpanExporter();
