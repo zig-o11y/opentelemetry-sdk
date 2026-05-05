@@ -30,8 +30,6 @@ pub fn build(b: *std.Build) !void {
     }).module("protobuf");
     const clock_mod = b.addModule("clock", .{
         .root_source_file = b.path("src/clock.zig"),
-        .target = target,
-        .optimize = optimize,
         .link_libc = true,
     });
 
@@ -146,8 +144,6 @@ pub fn build(b: *std.Build) !void {
     // Attach an OTLP stub module to allow examples to use it.
     const otel_stub_mod = b.createModule(.{
         .root_source_file = b.path("examples/otlp_stub/server.zig"),
-        .target = target,
-        .optimize = optimize,
         .imports = &.{
             .{ .name = "opentelemetry-sdk", .module = sdk_mod },
             .{ .name = "protobuf", .module = protobuf_mod },
@@ -416,8 +412,6 @@ fn buildIntegrationTests(
     const common_path = try integration_dir.join(b.allocator, "common.zig");
     const common_mod = b.createModule(.{
         .root_source_file = common_path,
-        .target = otel_mod.resolved_target.?,
-        .optimize = otel_mod.optimize.?,
         .imports = &.{
             .{ .name = "opentelemetry-sdk", .module = otel_mod },
             .{ .name = "clock", .module = clock_mod },
