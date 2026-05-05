@@ -3,8 +3,10 @@
 //! OTLP is a protocol used for transmitting telemetry data across networks, encoding them with protobuf or JSON.
 //! See https://opentelemetry.io/docs/specs/otlp/
 //!
-//! OTLP transport can be have 2 types of transport: HTTP or gRPC.
-//! Currently, only HTTP transport is implemented, because gRPC is not yet supported in Zig's ecosystem.
+//! OTLP transport supports two transports: HTTP and gRPC. The active gRPC
+//! backend is selected at build time via `-Dgrpc-provider=<none|libgrpc|...>`;
+//! when no real backend is wired in, gRPC exports fail with
+//! `error.UnimplementedTransportProtocol`.
 
 const std = @import("std");
 const clock = @import("clock");
@@ -19,6 +21,7 @@ const log = std.log.scoped(.otlp);
 
 const proto = @import("opentelemetry-proto");
 const protobuf = @import("protobuf");
+const grpc_transport = @import("grpc_transport");
 
 const pbmetrics = proto.metrics_v1;
 const pblogs = proto.logs_v1;
@@ -48,7 +51,13 @@ pub const ConfigError = error{
 
 /// Error set for the OTLP Export operation.
 pub const ExportError = error{
+    /// The transport accepted the request and is retrying it asynchronously
+    /// (e.g. on a detached background thread). The caller should treat this
+    /// as "in flight" and not retry itself.
     RequestEnqueuedForRetry,
+    /// The server returned a retryable status, but the transport did not take
+    /// ownership of the retry. The caller may retry at its discretion.
+    RetryableStatusCodeInResponse,
     UnimplementedTransportProtocol,
     NonRetryableStatusCodeInResponse,
 };
@@ -116,6 +125,20 @@ pub const Signal = enum {
             .logs => return "/v1/logs",
             .traces => return "/v1/traces",
         }
+    }
+
+    /// Build the gRPC method path "/<package>.<Service>/Export" from the
+    /// constants exposed by the protobuf-generated service stub.
+    fn grpcPath(self: Self) []const u8 {
+        switch (self) {
+            .metrics => return grpcPathFor(pbcollector_metrics.MetricsService(void, error{})),
+            .logs => return grpcPathFor(pbcollector_logs.LogsService(void, error{})),
+            .traces => return grpcPathFor(pbcollector_trace.TraceService(void, error{})),
+        }
+    }
+
+    fn grpcPathFor(comptime Service: type) []const u8 {
+        return "/" ++ Service.package ++ "." ++ Service.service_name ++ "/Export";
     }
 
     /// Actual signal data as protobuf messages.
@@ -847,32 +870,39 @@ pub fn Export(
     config: *ConfigOptions,
     otlp_payload: Signal.Data,
 ) !void {
-    // FIXME better polymorphism here.
-    // Determine the type of client to be used, currently only HTTP is supported.
-    const client = switch (config.protocol) {
-        .http_json, .http_protobuf => try HTTPClient.init(allocator, io, config),
-        .grpc => return ExportError.UnimplementedTransportProtocol,
-    };
-    // the `deinit()` method MUST be implemented by all clients.
-    defer client.deinit();
-
     const payload = otlp_payload.toOwnedSlice(allocator, config.protocol) catch |err| {
         log.err("failed to encode payload via {t}: {}", .{ config.protocol, err });
         return err;
     };
     defer allocator.free(payload);
 
-    const url = try config.httpUrlForSignal(otlp_payload.signal(), allocator);
-    defer allocator.free(url);
+    return switch (config.protocol) {
+        // FIXME better polymorphism here.
+        .http_json, .http_protobuf => blk: {
+            const http_client = try HTTPClient.init(allocator, io, config);
+            defer http_client.deinit();
 
-    client.send(url, payload) catch |err| {
-        switch (err) {
-            ExportError.RequestEnqueuedForRetry => return err,
-            else => {
-                log.err("failed to send payload: {}", .{err});
-                return err;
-            },
-        }
+            const url = try config.httpUrlForSignal(otlp_payload.signal(), allocator);
+            defer allocator.free(url);
+
+            break :blk http_client.send(url, payload);
+        },
+        .grpc => grpc_transport.send(allocator, otlp_payload.signal().grpcPath(), payload, .{
+            .endpoint = config.endpoint,
+            .insecure = config.insecure,
+            .timeout_sec = config.timeout_sec,
+            .server_root_certificates_filename = if (config.tls_opts) |tls| tls.certificate_file else null,
+            .client_certificate_filename = if (config.tls_opts) |tls| tls.client_certificate_file else null,
+            .client_private_key_filename = if (config.tls_opts) |tls| tls.client_private_key_file else null,
+        }),
+    } catch |err| {
+        // Both retry-related variants are signaling state, not failure: the
+        // HTTP transport owns its retry loop ("Enqueued"), while the gRPC
+        // transport surfaces a retryable status without retrying itself
+        // ("Retryable"). Don't pollute logs with either.
+        if (err != ExportError.RequestEnqueuedForRetry and err != ExportError.RetryableStatusCodeInResponse)
+            log.err("failed to send payload via {t}: {t}", .{ config.protocol, err });
+        return err;
     };
 }
 
