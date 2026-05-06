@@ -45,7 +45,10 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
           mirror: 'https://zigmirror.com'
       - run: zig build --fetch
-      - run: zig build examples
+      - name: Build and install examples
+        run: zig build examples
+      - name: Run examples
+        run: zig build run-examples
 
   # Execute bencharmks only if the PR has a specific label 'run::benchmarks'
   benchmarks:
