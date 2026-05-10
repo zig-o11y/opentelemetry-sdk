@@ -63,38 +63,46 @@ pub const ReadWriteLogRecord = struct {
         self.attributes.deinit(allocator);
     }
 
-    /// Convert to immutable ReadableLogRecord for export.
-    /// All string data is deep-copied into a heap-allocated arena; the caller's strings need
-    /// only remain valid for the duration of this call.
-    pub fn toReadable(self: *const Self, allocator: std.mem.Allocator) !ReadableLogRecord {
-        const arena: *std.heap.ArenaAllocator = try allocator.create(std.heap.ArenaAllocator);
-        errdefer allocator.destroy(arena);
-        arena.* = .init(allocator);
-        errdefer arena.deinit();
-
-        const alloc = arena.allocator();
-
-        const attrs = try alloc.alloc(Attribute, self.attributes.items.len);
-        for (self.attributes.items, attrs) |source, *dest| {
-            dest.* = .{
-                // most probably comptime constant, but we can't know for sure
-                .key = try alloc.dupe(u8, attr.key),
-                .value = switch (attr.value) {
-                    .string => |s| .{ .string = try alloc.dupe(u8, s) },
-                    else => attr.value,
-                },
-            };
-        }
-
+    /// Borrow the log record as a ReadableLogRecord without copying any data.
+    /// The returned record is only valid while this ReadWriteLogRecord is alive.
+    /// Use this for synchronous export (SimpleLogRecordProcessor).
+    pub fn asReadable(self: *const Self) ReadableLogRecord {
         return .{
-            .arena = arena,
             .timestamp = self.timestamp,
             .observed_timestamp = self.observed_timestamp,
             .trace_id = self.trace_id,
             .span_id = self.span_id,
             .severity_number = self.severity_number,
-            .severity_text = if (self.severity_text) |t| try a.dupe(u8, t) else null,
-            .body = if (self.body) |b| try a.dupe(u8, b) else null,
+            .severity_text = self.severity_text,
+            .body = self.body,
+            .attributes = self.attributes.items,
+            .resource = self.resource,
+            .scope = self.scope,
+        };
+    }
+
+    /// Deep-copy all string data into the provided allocator and return an owned ReadableLogRecord.
+    /// Primarily used with arena allocators (BatchingLogRecordProcessor).
+    /// The caller is responsible for freeing the returned allocations.
+    pub fn toReadable(self: *const Self, allocator: std.mem.Allocator) !ReadableLogRecord {
+        const attrs = try allocator.alloc(Attribute, self.attributes.items.len);
+        for (self.attributes.items, attrs) |source, *dest| {
+            dest.* = .{
+                .key = try allocator.dupe(u8, source.key),
+                .value = switch (source.value) {
+                    .string => |s| .{ .string = try allocator.dupe(u8, s) },
+                    else => source.value,
+                },
+            };
+        }
+        return .{
+            .timestamp = self.timestamp,
+            .observed_timestamp = self.observed_timestamp,
+            .trace_id = self.trace_id,
+            .span_id = self.span_id,
+            .severity_number = self.severity_number,
+            .severity_text = if (self.severity_text) |t| try allocator.dupe(u8, t) else null,
+            .body = if (self.body) |b| try allocator.dupe(u8, b) else null,
             .attributes = attrs,
             .resource = self.resource,
             .scope = self.scope,
@@ -102,33 +110,26 @@ pub const ReadWriteLogRecord = struct {
     }
 };
 
-/// ReadableLogRecord is an immutable log record passed to exporters.
+/// ReadableLogRecord is an immutable, non-owning view of a log record passed to exporters.
 ///
-/// All owned data lives in its arena.
+/// String fields may point into caller-owned memory (asReadable) or into a processor-owned
+/// arena (toReadable). In either case, the record itself carries no ownership — the caller
+/// is responsible for managing the underlying allocations.
 ///
 /// see: https://opentelemetry.io/docs/specs/otel/logs/sdk/#logrecordexporter
 pub const ReadableLogRecord = struct {
-    arena: *std.heap.ArenaAllocator,
     timestamp: ?u64,
     observed_timestamp: u64,
     trace_id: ?[16]u8,
     span_id: ?[8]u8,
     severity_number: ?u8,
-    severity_text: ?[]u8,
-    body: ?[]u8,
-    attributes: []Attribute,
+    severity_text: ?[]const u8,
+    body: ?[]const u8,
+    attributes: []const Attribute,
     /// points into the LoggerProvider's resource
     resource: ?[]const Attribute,
     /// points into the Logger's scope
     scope: InstrumentationScope,
-
-    const Self = @This();
-
-    pub fn deinit(self: Self) void {
-        const child = self.arena.child_allocator;
-        self.arena.deinit();
-        child.destroy(self.arena);
-    }
 };
 
 /// SDK LoggerProvider implementation
@@ -454,7 +455,7 @@ test "LoggerProvider with processor" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, io, exporter);
+    var processor = SimpleLogRecordProcessor.init(io, exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     var provider = try LoggerProvider.init(allocator, io, null);
@@ -533,7 +534,7 @@ test "Logger log records inherit resource from provider" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, io, exporter);
+    var processor = SimpleLogRecordProcessor.init(io, exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     var provider = try LoggerProvider.init(allocator, io, resource_attrs);
@@ -576,7 +577,7 @@ test "Logger.enabled() returns true with active processors" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, io, exporter);
+    var processor = SimpleLogRecordProcessor.init(io, exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     var provider = try LoggerProvider.init(allocator, io, null);
@@ -634,7 +635,7 @@ test "Logger.enabled() returns false after shutdown" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, io, exporter);
+    var processor = SimpleLogRecordProcessor.init(io, exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     var provider = try LoggerProvider.init(allocator, io, null);

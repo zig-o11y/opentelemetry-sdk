@@ -327,7 +327,7 @@ test "std_log_bridge logFn prints text for body" {
         errdefer in_mem.writer.deinit();
         const exporter = in_mem.asLogRecordExporter();
 
-        var simple_processor = sdk.logs.SimpleLogRecordProcessor.init(std.testing.allocator, io2, exporter);
+        var simple_processor = sdk.logs.SimpleLogRecordProcessor.init(io2, exporter);
         const processor = simple_processor.asLogRecordProcessor();
         try provider.addLogRecordProcessor(processor);
 
