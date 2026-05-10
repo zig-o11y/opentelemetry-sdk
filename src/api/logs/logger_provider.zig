@@ -23,6 +23,13 @@ const trace = @import("../trace.zig");
 const Configuration = @import("../../sdk/config.zig").Configuration;
 const resource_attributes = @import("../../sdk/resource.zig");
 
+/// Log record body: either a plain text string or a structured key-value list.
+/// Mirrors the protobuf AnyValue body variants used in OTLP.
+pub const Body = union(enum) {
+    string: []const u8,
+    structured: []const Attribute,
+};
+
 /// ReadWriteLogRecord is a mutable log record used during emission.
 /// Processors can modify this record, and mutations are visible to subsequent processors.
 /// see: https://opentelemetry.io/docs/specs/otel/logs/sdk/#logrecordprocessor
@@ -33,8 +40,7 @@ pub const ReadWriteLogRecord = struct {
     span_id: ?[8]u8,
     severity_number: ?u8,
     severity_text: ?[]const u8,
-    body: ?[]const u8,
-    structured_body: ?[]const Attribute,
+    body: ?Body,
     attributes: std.ArrayListUnmanaged(Attribute),
     resource: ?[]const Attribute,
     scope: InstrumentationScope,
@@ -51,7 +57,6 @@ pub const ReadWriteLogRecord = struct {
             .severity_number = null,
             .severity_text = null,
             .body = null,
-            .structured_body = null,
             .attributes = .empty,
             .resource = null,
             .scope = scope,
@@ -79,7 +84,6 @@ pub const ReadWriteLogRecord = struct {
             .severity_number = self.severity_number,
             .severity_text = self.severity_text,
             .body = self.body,
-            .structured_body = self.structured_body,
             .attributes = self.attributes.items,
             .resource = self.resource,
             .scope = self.scope,
@@ -101,18 +105,21 @@ pub const ReadWriteLogRecord = struct {
                 },
             };
         }
-        const structured_body: ?[]Attribute = if (self.structured_body) |sb| blk: {
-            const copy = try allocator.alloc(Attribute, sb.len);
-            for (sb, copy) |source, *dest| {
-                dest.* = .{
-                    .key = source.key,
-                    .value = switch (source.value) {
-                        .string => |s| .{ .string = try allocator.dupe(u8, s) },
-                        else => source.value,
-                    },
-                };
-            }
-            break :blk copy;
+        const body: ?Body = if (self.body) |b| switch (b) {
+            .string => |s| Body{ .string = try allocator.dupe(u8, s) },
+            .structured => |kvs| blk: {
+                const copy = try allocator.alloc(Attribute, kvs.len);
+                for (kvs, copy) |source, *dest| {
+                    dest.* = .{
+                        .key = source.key,
+                        .value = switch (source.value) {
+                            .string => |s| .{ .string = try allocator.dupe(u8, s) },
+                            else => source.value,
+                        },
+                    };
+                }
+                break :blk Body{ .structured = copy };
+            },
         } else null;
 
         return .{
@@ -122,8 +129,7 @@ pub const ReadWriteLogRecord = struct {
             .span_id = self.span_id,
             .severity_number = self.severity_number,
             .severity_text = if (self.severity_text) |t| try allocator.dupe(u8, t) else null,
-            .body = if (self.body) |b| try allocator.dupe(u8, b) else null,
-            .structured_body = structured_body,
+            .body = body,
             .attributes = attrs,
             .resource = self.resource,
             .scope = self.scope,
@@ -146,8 +152,7 @@ pub const ReadableLogRecord = struct {
     span_id: ?[8]u8,
     severity_number: ?u8,
     severity_text: ?[]const u8,
-    body: ?[]const u8,
-    structured_body: ?[]const Attribute,
+    body: ?Body,
     attributes: []const Attribute,
     /// points into the LoggerProvider's resource
     resource: ?[]const Attribute,
@@ -386,7 +391,7 @@ pub const Logger = struct {
 
         log_record.severity_number = severity_number;
         log_record.severity_text = options.severity_text;
-        log_record.body = body;
+        log_record.body = .{ .string = body };
         log_record.resource = self.provider.resource;
         log_record.trace_id = if (options.span_context) |sc| sc.trace_id.toBinary() else null;
         log_record.span_id = if (options.span_context) |sc| sc.span_id.toBinary() else null;
@@ -408,7 +413,7 @@ pub const Logger = struct {
     }
 
     /// Emit a structured log record whose body is a set of key-value fields.
-    /// `data` must be an anonymous struct literal; each field becomes a kvlist entry in the body.
+    /// `data` must be an anonymous struct literal; each field becomes a structured entry in the body.
     /// Field values must be one of: `[]const u8`, `bool`, `i64`, `f64` (or comptime equivalents).
     ///
     /// Example:
@@ -440,7 +445,7 @@ pub const Logger = struct {
 
         log_record.severity_number = severity_number;
         log_record.severity_text = options.severity_text;
-        log_record.structured_body = &body_attrs;
+        log_record.body = .{ .structured = &body_attrs };
         log_record.resource = self.provider.resource;
         log_record.trace_id = if (options.span_context) |sc| sc.trace_id.toBinary() else null;
         log_record.span_id = if (options.span_context) |sc| sc.span_id.toBinary() else null;
@@ -939,7 +944,7 @@ test "LoggerProvider with config from environment" {
     try std.testing.expectEqual(@as(usize, @intCast(lc.blrp_max_export_batch_size)), batch_processor.max_export_batch_size);
 }
 
-test "Logger.emitStructured produces structured_body with correct fields" {
+test "Logger.emitStructured produces structured body with correct fields" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -953,7 +958,10 @@ test "Logger.emitStructured produces structured_body with correct fields" {
         pub fn exportLogs(ctx: *anyopaque, records: []ReadableLogRecord) anyerror!void {
             const self: *@This() = @ptrCast(@alignCast(ctx));
             if (records.len == 0) return;
-            const sb = records[0].structured_body orelse return;
+            const sb = switch (records[0].body orelse return) {
+                .structured => |kvs| kvs,
+                else => return,
+            };
             self.field_count = sb.len;
             for (sb) |attr| {
                 if (std.mem.eql(u8, attr.key, "http.method"))

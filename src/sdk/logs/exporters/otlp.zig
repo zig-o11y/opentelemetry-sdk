@@ -246,16 +246,16 @@ pub const OTLPExporter = struct {
         else
             "";
 
-        const body: ?pbcommon.AnyValue = if (log_record.structured_body) |sb| blk: {
-            var kvlist: std.ArrayList(pbcommon.KeyValue) = try .initCapacity(self.allocator, sb.len);
-            for (sb) |attr| {
-                kvlist.appendAssumeCapacity(try attributeToOTLP(attr.key, attr.value));
-            }
-            break :blk pbcommon.AnyValue{ .value = .{ .kvlist_value = .{ .values = kvlist } } };
-        } else if (log_record.body) |b|
-            pbcommon.AnyValue{ .value = .{ .string_value = (b) } }
-        else
-            null;
+        const body: ?pbcommon.AnyValue = if (log_record.body) |b| switch (b) {
+            .string => |s| pbcommon.AnyValue{ .value = .{ .string_value = s } },
+            .structured => |kvs| blk: {
+                var kvlist: std.ArrayList(pbcommon.KeyValue) = try .initCapacity(self.allocator, kvs.len);
+                for (kvs) |attr| {
+                    kvlist.appendAssumeCapacity(try attributeToOTLP(attr.key, attr.value));
+                }
+                break :blk pbcommon.AnyValue{ .value = .{ .kvlist_value = .{ .values = kvlist } } };
+            },
+        } else null;
 
         // Use timestamp if available, otherwise use observed_timestamp
         const time_unix_nano = log_record.timestamp orelse log_record.observed_timestamp;
@@ -425,11 +425,10 @@ test "Log record to OTLP conversion with all fields" {
         .span_id = span_id,
         .severity_number = 17, // ERROR
         .severity_text = "ERROR",
-        .body = "Test log message",
+        .body = .{ .string = "Test log message" },
         .attributes = attrs,
         .resource = null,
         .scope = scope,
-        .structured_body = null,
         .location = .{ .module = "mylib", .file = "src/mylib.zig", .fn_name = "doWork", .line = 42, .column = 4 },
     };
 
@@ -487,11 +486,10 @@ test "Log records grouped by instrumentation scope" {
             .span_id = null,
             .severity_number = 9,
             .severity_text = "INFO",
-            .body = "Message from lib1",
+            .body = .{ .string = "Message from lib1" },
             .attributes = &[_]attribute.Attribute{},
             .resource = null,
             .scope = scope1,
-            .structured_body = null,
             .location = null,
         },
         logs.ReadableLogRecord{
@@ -501,11 +499,10 @@ test "Log records grouped by instrumentation scope" {
             .span_id = null,
             .severity_number = 17,
             .severity_text = "ERROR",
-            .body = "Message from lib2",
+            .body = .{ .string = "Message from lib2" },
             .attributes = &[_]attribute.Attribute{},
             .resource = null,
             .scope = scope2,
-            .structured_body = null,
             .location = null,
         },
         logs.ReadableLogRecord{
@@ -515,11 +512,10 @@ test "Log records grouped by instrumentation scope" {
             .span_id = null,
             .severity_number = 9,
             .severity_text = "INFO",
-            .body = "Another message from lib1",
+            .body = .{ .string = "Another message from lib1" },
             .attributes = &[_]attribute.Attribute{},
             .resource = null,
             .scope = scope1,
-            .structured_body = null,
             .location = null,
         },
     };
@@ -588,11 +584,10 @@ test "Resource attributes in OTLP export" {
             .span_id = null,
             .severity_number = 9,
             .severity_text = "INFO",
-            .body = "Test message",
+            .body = .{ .string = "Test message" },
             .attributes = &[_]attribute.Attribute{},
             .resource = resource_attrs,
             .scope = scope,
-            .structured_body = null,
             .location = null,
         },
     };
@@ -637,11 +632,10 @@ test "Trace context binary encoding" {
         .span_id = span_id,
         .severity_number = 9,
         .severity_text = "INFO",
-        .body = "Test",
+        .body = .{ .string = "Test" },
         .attributes = &[_]attribute.Attribute{},
         .resource = null,
         .scope = scope,
-        .structured_body = null,
         .location = null,
     };
 
@@ -683,11 +677,10 @@ test "Memory cleanup verification" {
             .span_id = null,
             .severity_number = 9,
             .severity_text = "INFO",
-            .body = "Test",
+            .body = .{ .string = "Test" },
             .attributes = attrs,
             .resource = null,
             .scope = scope,
-            .structured_body = null,
             .location = null,
         },
     };

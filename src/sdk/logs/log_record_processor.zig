@@ -429,7 +429,7 @@ test "SimpleLogRecordProcessor basic functionality" {
     var log_record = logs.ReadWriteLogRecord.init(scope);
     defer log_record.deinit(allocator);
 
-    log_record.body = "test log message";
+    log_record.body = .{ .string = "test log message" };
     log_record.severity_number = 9; // Info
 
     const ctx = context.Context.init();
@@ -439,7 +439,7 @@ test "SimpleLogRecordProcessor basic functionality" {
 
     // Verify the log was exported
     try std.testing.expectEqual(@as(usize, 1), mock_exporter.exported_logs.items.len);
-    try std.testing.expectEqualStrings("test log message", mock_exporter.exported_logs.items[0].body.?);
+    try std.testing.expectEqualStrings("test log message", mock_exporter.exported_logs.items[0].body.?.string);
     try std.testing.expectEqual(@as(u8, 9), mock_exporter.exported_logs.items[0].severity_number.?);
 }
 
@@ -482,7 +482,7 @@ test "SimpleLogRecordProcessor with attributes" {
     const attr = Attribute{ .key = "test.key", .value = .{ .string = "test.value" } };
     try log_record.setAttribute(allocator, attr);
 
-    log_record.body = "log with attributes";
+    log_record.body = .{ .string = "log with attributes" };
 
     const ctx = context.Context.init();
 
@@ -550,7 +550,7 @@ test "BatchingLogRecordProcessor basic functionality" {
         var log_record = logs.ReadWriteLogRecord.init(scope);
         defer log_record.deinit(allocator);
 
-        log_record.body = "test log message";
+        log_record.body = .{ .string = "test log message" };
         log_record.severity_number = 9;
 
         log_processor.onEmit(&log_record, ctx);
@@ -653,7 +653,7 @@ test "integration: multiple processors in pipeline" {
     var log_record = logs.ReadWriteLogRecord.init(scope);
     defer log_record.deinit(allocator);
 
-    log_record.body = "test message";
+    log_record.body = .{ .string = "test message" };
     log_record.severity_number = 9; // INFO
 
     const ctx = context.Context.init();
@@ -692,7 +692,6 @@ test "LogRecordQueue wrap-around split" {
                 .attributes = &.{},
                 .resource = null,
                 .scope = .{ .name = "t" },
-                .structured_body = null,
                 .location = null,
             };
         }
