@@ -106,7 +106,7 @@ test "GenericWriterExporter" {
         defer log_record.deinit(std.testing.allocator);
 
         const readable = try log_record.toReadable(std.testing.allocator);
-        defer readable.deinit(std.testing.allocator);
+        defer readable.deinit();
 
         var log_records = [_]logs.ReadableLogRecord{readable};
         try exporter.exportLogs(log_records[0..log_records.len]);
