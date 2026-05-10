@@ -12,7 +12,7 @@ const SerializableLogRecord = struct {
     span_id: ?[8]u8,
     severity_number: ?u8,
     severity_text: ?[]const u8,
-    body: ?[]const u8,
+    body: ?logs.Body,
     scope: InstrumentationScope,
 
     pub fn fromLogRecord(log_record: logs.ReadableLogRecord) SerializableLogRecord {
@@ -105,12 +105,11 @@ test "GenericWriterExporter" {
         var log_record = logs.ReadWriteLogRecord.init(scope);
         defer log_record.deinit(std.testing.allocator);
 
-        log_record.body = "test log message";
+        log_record.body = .{ .string = "test log message" };
         log_record.severity_number = 9;
         log_record.severity_text = "INFO";
 
-        const readable = try log_record.toReadable(std.testing.allocator);
-        defer readable.deinit(std.testing.allocator);
+        const readable = log_record.asReadable();
 
         var log_records = [_]logs.ReadableLogRecord{readable};
         try exporter.exportLogs(log_records[0..log_records.len]);

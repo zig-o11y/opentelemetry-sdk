@@ -17,10 +17,18 @@ const Attributes = @import("../../attributes.zig").Attributes;
 const InstrumentationScope = @import("../../scope.zig").InstrumentationScope;
 const Context = @import("../context/context.zig").Context;
 const EnabledParameters = @import("enabled_parameters.zig").EnabledParameters;
+const trace = @import("../trace.zig");
 
 // Import configuration module
 const Configuration = @import("../../sdk/config.zig").Configuration;
 const resource_attributes = @import("../../sdk/resource.zig");
+
+/// Log record body: either a plain text string or a structured key-value list.
+/// Mirrors the protobuf AnyValue body variants used in OTLP.
+pub const Body = union(enum) {
+    string: []const u8,
+    structured: []const Attribute,
+};
 
 /// ReadWriteLogRecord is a mutable log record used during emission.
 /// Processors can modify this record, and mutations are visible to subsequent processors.
@@ -32,10 +40,11 @@ pub const ReadWriteLogRecord = struct {
     span_id: ?[8]u8,
     severity_number: ?u8,
     severity_text: ?[]const u8,
-    body: ?[]const u8,
+    body: ?Body,
     attributes: std.ArrayListUnmanaged(Attribute),
     resource: ?[]const Attribute,
     scope: InstrumentationScope,
+    location: ?std.builtin.SourceLocation,
 
     const Self = @This();
 
@@ -51,6 +60,7 @@ pub const ReadWriteLogRecord = struct {
             .attributes = .empty,
             .resource = null,
             .scope = scope,
+            .location = null,
         };
     }
 
@@ -62,42 +72,78 @@ pub const ReadWriteLogRecord = struct {
         self.attributes.deinit(allocator);
     }
 
-    /// Convert to immutable ReadableLogRecord for export
-    pub fn toReadable(self: *const Self, allocator: std.mem.Allocator) !ReadableLogRecord {
-        const attrs = try allocator.alloc(Attribute, self.attributes.items.len);
-        errdefer allocator.free(attrs);
-        @memcpy(attrs, self.attributes.items);
-
-        // Copy severity_text if present
-        const severity_text = if (self.severity_text) |text|
-            try allocator.dupe(u8, text)
-        else
-            null;
-        errdefer if (severity_text) |text| allocator.free(text);
-
-        // Copy body if present
-        const body = if (self.body) |b|
-            try allocator.dupe(u8, b)
-        else
-            null;
-        errdefer if (body) |b| allocator.free(b);
-
-        return ReadableLogRecord{
+    /// Borrow the log record as a ReadableLogRecord without copying any data.
+    /// The returned record is only valid while this ReadWriteLogRecord is alive.
+    /// Use this for synchronous export (SimpleLogRecordProcessor).
+    pub fn asReadable(self: *const Self) ReadableLogRecord {
+        return .{
             .timestamp = self.timestamp,
             .observed_timestamp = self.observed_timestamp,
             .trace_id = self.trace_id,
             .span_id = self.span_id,
             .severity_number = self.severity_number,
-            .severity_text = severity_text,
+            .severity_text = self.severity_text,
+            .body = self.body,
+            .attributes = self.attributes.items,
+            .resource = self.resource,
+            .scope = self.scope,
+            .location = self.location,
+        };
+    }
+
+    /// Deep-copy all string data into the provided allocator and return an owned ReadableLogRecord.
+    /// Primarily used with arena allocators (BatchingLogRecordProcessor).
+    /// The caller is responsible for freeing the returned allocations.
+    pub fn toReadable(self: *const Self, allocator: std.mem.Allocator) !ReadableLogRecord {
+        const attrs = try allocator.alloc(Attribute, self.attributes.items.len);
+        for (self.attributes.items, attrs) |source, *dest| {
+            dest.* = .{
+                .key = try allocator.dupe(u8, source.key),
+                .value = switch (source.value) {
+                    .string => |s| .{ .string = try allocator.dupe(u8, s) },
+                    else => source.value,
+                },
+            };
+        }
+        const body: ?Body = if (self.body) |b| switch (b) {
+            .string => |s| Body{ .string = try allocator.dupe(u8, s) },
+            .structured => |kvs| blk: {
+                const copy = try allocator.alloc(Attribute, kvs.len);
+                for (kvs, copy) |source, *dest| {
+                    dest.* = .{
+                        .key = source.key,
+                        .value = switch (source.value) {
+                            .string => |s| .{ .string = try allocator.dupe(u8, s) },
+                            else => source.value,
+                        },
+                    };
+                }
+                break :blk Body{ .structured = copy };
+            },
+        } else null;
+
+        return .{
+            .timestamp = self.timestamp,
+            .observed_timestamp = self.observed_timestamp,
+            .trace_id = self.trace_id,
+            .span_id = self.span_id,
+            .severity_number = self.severity_number,
+            .severity_text = if (self.severity_text) |t| try allocator.dupe(u8, t) else null,
             .body = body,
             .attributes = attrs,
             .resource = self.resource,
             .scope = self.scope,
+            .location = self.location,
         };
     }
 };
 
-/// ReadableLogRecord is an immutable log record passed to exporters.
+/// ReadableLogRecord is an immutable, non-owning view of a log record passed to exporters.
+///
+/// String fields may point into caller-owned memory (asReadable) or into a processor-owned
+/// arena (toReadable). In either case, the record itself carries no ownership — the caller
+/// is responsible for managing the underlying allocations.
+///
 /// see: https://opentelemetry.io/docs/specs/otel/logs/sdk/#logrecordexporter
 pub const ReadableLogRecord = struct {
     timestamp: ?u64,
@@ -106,18 +152,13 @@ pub const ReadableLogRecord = struct {
     span_id: ?[8]u8,
     severity_number: ?u8,
     severity_text: ?[]const u8,
-    body: ?[]const u8,
+    body: ?Body,
     attributes: []const Attribute,
+    /// points into the LoggerProvider's resource
     resource: ?[]const Attribute,
+    /// points into the Logger's scope
     scope: InstrumentationScope,
-
-    const Self = @This();
-
-    pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
-        allocator.free(self.attributes);
-        if (self.severity_text) |text| allocator.free(text);
-        if (self.body) |b| allocator.free(b);
-    }
+    location: ?std.builtin.SourceLocation,
 };
 
 /// SDK LoggerProvider implementation
@@ -268,6 +309,32 @@ pub const LoggerProvider = struct {
     }
 };
 
+fn structFieldToAttributeValue(v: anytype) AttributeValue {
+    const T = @TypeOf(v);
+    return switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .slice => if (p.child == u8)
+                .{ .string = v }
+            else
+                @compileError("unsupported slice type for structured log field: " ++ @typeName(T)),
+            .one => switch (@typeInfo(p.child)) {
+                .array => |a| if (a.child == u8)
+                    .{ .string = v } // *const [N:0]u8 string literal
+                else
+                    @compileError("unsupported array type for structured log field: " ++ @typeName(T)),
+                else => @compileError("unsupported pointer type for structured log field: " ++ @typeName(T)),
+            },
+            else => @compileError("unsupported pointer type for structured log field: " ++ @typeName(T)),
+        },
+        .bool => .{ .bool = v },
+        .int => .{ .int = @as(i64, v) },
+        .comptime_int => .{ .int = @as(i64, v) },
+        .float => .{ .double = @as(f64, v) },
+        .comptime_float => .{ .double = @as(f64, v) },
+        else => @compileError("unsupported type for structured log field: " ++ @typeName(T)),
+    };
+}
+
 /// Logger implementation
 pub const Logger = struct {
     allocator: std.mem.Allocator,
@@ -290,37 +357,83 @@ pub const Logger = struct {
         self.allocator.destroy(self);
     }
 
-    /// Emit a log record
+    pub const EmitOptions = struct {
+        /// Human-readable severity label (e.g. "WARN", "CRITICAL").
+        /// Optional: backends can derive a standard label from `severity_number`.
+        /// Useful when bridging from a logging system that has its own level names.
+        severity_text: ?[]const u8 = null,
+
+        /// Key-value pairs attached to this log record.
+        attributes: ?[]const Attribute = null,
+
+        /// Span context to correlate this log record with an active trace.
+        /// Pass `span.span_context` to enable log-trace correlation in the backend.
+        span_context: ?trace.SpanContext = null,
+
+        /// Source location of the log call site. Pass `@src()` to capture
+        /// file, function name, line, and column at compile time.
+        location: ?std.builtin.SourceLocation = null,
+    };
+
+    /// Emit a log record.
     pub fn emit(
         self: *Self,
-        severity_number: ?u8,
-        severity_text: ?[]const u8,
-        body: ?[]const u8,
-        attributes: ?[]const Attribute,
+        severity_number: u8,
+        body: []const u8,
+        options: EmitOptions,
     ) void {
-        if (self.provider.sdk_disabled or self.provider.is_shutdown.load(.acquire)) {
-            return;
-        }
+        if (self.provider.sdk_disabled or self.provider.is_shutdown.load(.acquire)) return;
+        self.emitRecord(severity_number, .{ .string = body }, options);
+    }
 
-        // Create ReadWriteLogRecord
+    /// Emit a structured log record whose body is a set of key-value fields.
+    /// `data` must be an anonymous struct literal; each field becomes a structured entry in the body.
+    /// Field values must be one of: `[]const u8`, `bool`, `i64`, `f64` (or comptime equivalents).
+    ///
+    /// Example:
+    /// ```zig
+    /// logger.emitStructured(9, .{
+    ///     .@"http.method" = "GET",
+    ///     .@"http.status" = 200,
+    /// }, .{});
+    /// ```
+    pub fn emitStructured(
+        self: *Self,
+        severity_number: u8,
+        data: anytype,
+        options: EmitOptions,
+    ) void {
+        if (self.provider.sdk_disabled or self.provider.is_shutdown.load(.acquire)) return;
+
+        const fields = @typeInfo(@TypeOf(data)).@"struct".fields;
+        var body_attrs: [fields.len]Attribute = undefined;
+        inline for (fields, 0..) |field, i| {
+            body_attrs[i] = .{
+                .key = field.name,
+                .value = structFieldToAttributeValue(@field(data, field.name)),
+            };
+        }
+        self.emitRecord(severity_number, .{ .structured = &body_attrs }, options);
+    }
+
+    fn emitRecord(self: *Self, severity_number: u8, body: ?Body, options: EmitOptions) void {
         var log_record = ReadWriteLogRecord.init(self.scope);
         defer log_record.deinit(self.allocator);
 
         log_record.severity_number = severity_number;
-        log_record.severity_text = severity_text;
+        log_record.severity_text = options.severity_text;
         log_record.body = body;
         log_record.resource = self.provider.resource;
+        log_record.trace_id = if (options.span_context) |sc| sc.trace_id.toBinary() else null;
+        log_record.span_id = if (options.span_context) |sc| sc.span_id.toBinary() else null;
+        log_record.location = options.location;
 
-        // Add attributes if provided
-        if (attributes) |attrs| {
-            for (attrs) |attr| {
-                log_record.setAttribute(self.allocator, attr) catch |err| {
-                    std.log.err("Failed to add attribute to log record: {}", .{err});
-                };
-            }
+        if (options.attributes) |attrs| {
+            log_record.attributes.appendSlice(self.allocator, attrs) catch |err| {
+                std.log.err("Failed to add attributes to log record: {}", .{err});
+            };
         }
 
-        // Call processors in order
         const ctx = Context.init();
         self.provider.mutex.lockUncancelable(self.provider.io);
         defer self.provider.mutex.unlock(self.provider.io);
@@ -337,7 +450,7 @@ pub const Logger = struct {
     /// ```zig
     /// if (logger.enabled(.{ .context = ctx, .severity = 9 })) {
     ///     const expensive_data = computeExpensiveDebugInfo();
-    ///     logger.emit(9, "INFO", expensive_data, null);
+    ///     logger.emit(9, expensive_data, .{});
     /// }
     /// ```
     ///
@@ -431,7 +544,7 @@ test "LoggerProvider with processor" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, io, exporter);
+    var processor = SimpleLogRecordProcessor.init(io, exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     var provider = try LoggerProvider.init(allocator, io, null);
@@ -443,7 +556,7 @@ test "LoggerProvider with processor" {
     const logger = try provider.getLogger(scope);
 
     // Emit a log
-    logger.emit(9, "INFO", "test message", null);
+    logger.emit(9, "test message", .{ .severity_text = "INFO" });
 
     // Verify export was called
     try std.testing.expectEqual(@as(usize, 1), mock_exporter.export_count);
@@ -510,7 +623,7 @@ test "Logger log records inherit resource from provider" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, io, exporter);
+    var processor = SimpleLogRecordProcessor.init(io, exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     var provider = try LoggerProvider.init(allocator, io, resource_attrs);
@@ -522,7 +635,7 @@ test "Logger log records inherit resource from provider" {
     const logger = try provider.getLogger(scope);
 
     // Emit a log
-    logger.emit(9, "INFO", "test message", null);
+    logger.emit(9, "test message", .{ .severity_text = "INFO" });
 
     // Verify resource was passed to the log record
     try std.testing.expect(mock_exporter.captured_resource != null);
@@ -553,7 +666,7 @@ test "Logger.enabled() returns true with active processors" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, io, exporter);
+    var processor = SimpleLogRecordProcessor.init(io, exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     var provider = try LoggerProvider.init(allocator, io, null);
@@ -611,7 +724,7 @@ test "Logger.enabled() returns false after shutdown" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, io, exporter);
+    var processor = SimpleLogRecordProcessor.init(io, exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     var provider = try LoggerProvider.init(allocator, io, null);
@@ -806,4 +919,62 @@ test "LoggerProvider with config from environment" {
     try std.testing.expectEqual(lc.blrp_schedule_delay_ms, batch_processor.scheduled_delay_millis);
     try std.testing.expectEqual(lc.blrp_export_timeout_ms, batch_processor.export_timeout_millis);
     try std.testing.expectEqual(@as(usize, @intCast(lc.blrp_max_export_batch_size)), batch_processor.max_export_batch_size);
+}
+
+test "Logger.emitStructured produces structured body with correct fields" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const MockExporter = struct {
+        field_count: usize = 0,
+        found_method: bool = false,
+        found_status: bool = false,
+        found_success: bool = false,
+        found_duration: bool = false,
+
+        pub fn exportLogs(ctx: *anyopaque, records: []ReadableLogRecord) anyerror!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            if (records.len == 0) return;
+            const sb = switch (records[0].body orelse return) {
+                .structured => |kvs| kvs,
+                else => return,
+            };
+            self.field_count = sb.len;
+            for (sb) |attr| {
+                if (std.mem.eql(u8, attr.key, "http.method"))
+                    self.found_method = std.mem.eql(u8, attr.value.string, "GET");
+                if (std.mem.eql(u8, attr.key, "http.status"))
+                    self.found_status = attr.value.int == 200;
+                if (std.mem.eql(u8, attr.key, "http.success"))
+                    self.found_success = attr.value.bool == true;
+                if (std.mem.eql(u8, attr.key, "http.duration_ms"))
+                    self.found_duration = attr.value.double == 12.5;
+            }
+        }
+        pub fn shutdown(_: *anyopaque) anyerror!void {}
+        pub fn asLogRecordExporter(self: *@This()) LogRecordExporter {
+            return .{ .ptr = self, .vtable = &.{ .exportLogsFn = exportLogs, .shutdownFn = shutdown } };
+        }
+    };
+
+    var mock = MockExporter{};
+    var processor = SimpleLogRecordProcessor.init(io, mock.asLogRecordExporter());
+
+    var provider = try LoggerProvider.init(allocator, io, null);
+    defer provider.deinit();
+    try provider.addLogRecordProcessor(processor.asLogRecordProcessor());
+
+    const logger = try provider.getLogger(.{ .name = "test" });
+    logger.emitStructured(9, .{
+        .@"http.method" = "GET",
+        .@"http.status" = 200,
+        .@"http.success" = true,
+        .@"http.duration_ms" = 12.5,
+    }, .{});
+
+    try std.testing.expectEqual(@as(usize, 4), mock.field_count);
+    try std.testing.expect(mock.found_method);
+    try std.testing.expect(mock.found_status);
+    try std.testing.expect(mock.found_success);
+    try std.testing.expect(mock.found_duration);
 }

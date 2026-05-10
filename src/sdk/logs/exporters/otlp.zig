@@ -84,7 +84,7 @@ pub const OTLPExporter = struct {
     }
 
     fn logsToOTLPRequest(self: *Self, log_records: []logs.ReadableLogRecord) !pbcollector_logs.ExportLogsServiceRequest {
-        var resource_logs = std.ArrayList(pblogs.ResourceLogs).empty;
+        var resource_logs: std.ArrayList(pblogs.ResourceLogs) = .empty;
 
         // Group log records by instrumentation scope
         var scope_groups = std.HashMap(
@@ -111,19 +111,18 @@ pub const OTLPExporter = struct {
             try result.value_ptr.append(self.allocator, log_record);
         }
 
-        var scope_logs_list = std.ArrayList(pblogs.ScopeLogs).empty;
+        var scope_logs_list: std.ArrayList(pblogs.ScopeLogs) = .empty;
 
         // Convert each scope group to OTLP format
         var scope_iterator = scope_groups.iterator();
         while (scope_iterator.next()) |entry| {
             const scope_log_records = entry.value_ptr.*;
 
-            var otlp_log_records = std.ArrayList(pblogs.LogRecord).empty;
+            var otlp_log_records: std.ArrayList(pblogs.LogRecord) = try .initCapacity(self.allocator, scope_log_records.items.len);
 
             // Convert each log record to OTLP format
             for (scope_log_records.items) |log_record| {
-                const otlp_log = try self.logRecordToOTLP(log_record);
-                try otlp_log_records.append(self.allocator, otlp_log);
+                otlp_log_records.appendAssumeCapacity(try self.logRecordToOTLP(log_record));
             }
 
             // Create scope information from the first log record's scope
@@ -137,11 +136,11 @@ pub const OTLPExporter = struct {
                     .attributes = null,
                 };
 
-            var scope_attributes = std.ArrayList(pbcommon.KeyValue).empty;
+            var scope_attributes: std.ArrayList(pbcommon.KeyValue) = .empty;
             if (scope_info.attributes) |attrs| {
+                try scope_attributes.ensureTotalCapacityPrecise(self.allocator, attrs.len);
                 for (attrs) |attr| {
-                    const key_value = try attributeToOTLP(attr.key, attr.value);
-                    try scope_attributes.append(self.allocator, key_value);
+                    scope_attributes.appendAssumeCapacity(try attributeToOTLP(attr.key, attr.value));
                 }
             }
 
@@ -162,14 +161,14 @@ pub const OTLPExporter = struct {
         var resource_attributes = std.ArrayList(pbcommon.KeyValue).empty;
         if (log_records.len > 0) {
             if (log_records[0].resource) |attrs| {
+                try resource_attributes.ensureTotalCapacityPrecise(self.allocator, attrs.len);
                 for (attrs) |attr| {
-                    const key_value = try attributeToOTLP(attr.key, attr.value);
-                    try resource_attributes.append(self.allocator, key_value);
+                    resource_attributes.appendAssumeCapacity(try attributeToOTLP(attr.key, attr.value));
                 }
             }
         }
 
-        const resource_log = pblogs.ResourceLogs{
+        const resource_log: pblogs.ResourceLogs = .{
             .resource = pbresource.Resource{
                 .attributes = resource_attributes,
                 .dropped_attributes_count = 0,
@@ -203,10 +202,15 @@ pub const OTLPExporter = struct {
 
                 // Clean up log records
                 for (scope_log.log_records.items) |*log_record| {
-                    // Clean up log record attributes
                     log_record.attributes.deinit(self.allocator);
                     if (log_record.trace_id.len > 0) self.allocator.free(log_record.trace_id);
                     if (log_record.span_id.len > 0) self.allocator.free(log_record.span_id);
+                    if (log_record.body) |*b| {
+                        if (b.value) |*v| switch (v.*) {
+                            .kvlist_value => |*kv| kv.values.deinit(self.allocator),
+                            else => {},
+                        };
+                    }
                 }
                 scope_log.log_records.deinit(self.allocator);
             }
@@ -216,32 +220,42 @@ pub const OTLPExporter = struct {
     }
 
     fn logRecordToOTLP(self: *Self, log_record: logs.ReadableLogRecord) !pblogs.LogRecord {
-        // Convert attributes
-        var attributes = std.ArrayList(pbcommon.KeyValue).empty;
+        const location_count: usize = if (log_record.location != null) 4 else 0;
+        var attributes: std.ArrayList(pbcommon.KeyValue) = try .initCapacity(self.allocator, log_record.attributes.len + location_count);
         for (log_record.attributes) |attr| {
-            const key_value = try attributeToOTLP(attr.key, attr.value);
-            try attributes.append(self.allocator, key_value);
+            attributes.appendAssumeCapacity(try attributeToOTLP(attr.key, attr.value));
+        }
+        if (log_record.location) |loc| {
+            attributes.appendAssumeCapacity(try attributeToOTLP("code.filepath", .{ .string = loc.file }));
+            attributes.appendAssumeCapacity(try attributeToOTLP("code.function", .{ .string = loc.fn_name }));
+            attributes.appendAssumeCapacity(try attributeToOTLP("code.namespace", .{ .string = loc.module }));
+            attributes.appendAssumeCapacity(try attributeToOTLP("code.lineno", .{ .int = @intCast(loc.line) }));
         }
 
-        // Convert trace_id to hex string (16 bytes -> 32 char hex).
-        // Duplicated onto the exporter allocator because bytesToHex returns a
-        // fixed-size array; borrowing its address would escape the stack frame.
-        const trace_id_str: []const u8 = if (log_record.trace_id) |tid| blk: {
-            const hex = std.fmt.bytesToHex(&tid, .lower);
-            break :blk try self.allocator.dupe(u8, &hex);
-        } else "";
-
-        // Convert span_id to hex string (8 bytes -> 16 char hex)
-        const span_id_str: []const u8 = if (log_record.span_id) |sid| blk: {
-            const hex = std.fmt.bytesToHex(&sid, .lower);
-            break :blk try self.allocator.dupe(u8, &hex);
-        } else "";
-
-        // Convert body to AnyValue
-        const body: ?pbcommon.AnyValue = if (log_record.body) |b|
-            pbcommon.AnyValue{ .value = .{ .string_value = (b) } }
+        // trace_id and span_id are protobuf `bytes` fields.
+        // Binary (gRPC/http_protobuf): serialized as raw bytes, so 16 and 8 bytes respectively.
+        // JSON (http_json): zig-protobuf base64-encodes bytes fields per proto3 JSON spec;
+        //   the collector's protojson unmarshaler base64-decodes back to the correct bytes.
+        const trace_id_str: []const u8 = if (log_record.trace_id) |tid|
+            try self.allocator.dupe(u8, &tid)
         else
-            null;
+            "";
+
+        const span_id_str: []const u8 = if (log_record.span_id) |sid|
+            try self.allocator.dupe(u8, &sid)
+        else
+            "";
+
+        const body: ?pbcommon.AnyValue = if (log_record.body) |b| switch (b) {
+            .string => |s| pbcommon.AnyValue{ .value = .{ .string_value = s } },
+            .structured => |kvs| blk: {
+                var kvlist: std.ArrayList(pbcommon.KeyValue) = try .initCapacity(self.allocator, kvs.len);
+                for (kvs) |attr| {
+                    kvlist.appendAssumeCapacity(try attributeToOTLP(attr.key, attr.value));
+                }
+                break :blk pbcommon.AnyValue{ .value = .{ .kvlist_value = .{ .values = kvlist } } };
+            },
+        } else null;
 
         // Use timestamp if available, otherwise use observed_timestamp
         const time_unix_nano = log_record.timestamp orelse log_record.observed_timestamp;
@@ -275,14 +289,14 @@ pub const OTLPExporter = struct {
 
     fn attributeToOTLP(key: []const u8, value: attribute.AttributeValue) !pbcommon.KeyValue {
         const any_value: ?pbcommon.AnyValue = switch (value) {
-            .string => |v| pbcommon.AnyValue{ .value = .{ .string_value = (v) } },
-            .bool => |v| pbcommon.AnyValue{ .value = .{ .bool_value = v } },
-            .int => |v| pbcommon.AnyValue{ .value = .{ .int_value = v } },
-            .double => |v| pbcommon.AnyValue{ .value = .{ .double_value = v } },
+            .string => |v| .{ .value = .{ .string_value = (v) } },
+            .bool => |v| .{ .value = .{ .bool_value = v } },
+            .int => |v| .{ .value = .{ .int_value = v } },
+            .double => |v| .{ .value = .{ .double_value = v } },
             .baggage => unreachable, // Baggage is not a regular attribute
         };
 
-        return pbcommon.KeyValue{
+        return .{
             .key = (key),
             .value = any_value,
         };
@@ -411,10 +425,11 @@ test "Log record to OTLP conversion with all fields" {
         .span_id = span_id,
         .severity_number = 17, // ERROR
         .severity_text = "ERROR",
-        .body = "Test log message",
+        .body = .{ .string = "Test log message" },
         .attributes = attrs,
         .resource = null,
         .scope = scope,
+        .location = .{ .module = "mylib", .file = "src/mylib.zig", .fn_name = "doWork", .line = 42, .column = 4 },
     };
 
     var otlp_log = try exporter.logRecordToOTLP(log_record);
@@ -430,7 +445,20 @@ test "Log record to OTLP conversion with all fields" {
     try std.testing.expectEqual(pblogs.SeverityNumber.SEVERITY_NUMBER_ERROR, otlp_log.severity_number);
     try std.testing.expectEqualStrings("ERROR", otlp_log.severity_text);
     try std.testing.expectEqualStrings("Test log message", otlp_log.body.?.value.?.string_value);
-    try std.testing.expectEqual(@as(usize, 2), otlp_log.attributes.items.len);
+    // 2 user attributes + 4 code.* location attributes
+    try std.testing.expectEqual(@as(usize, 6), otlp_log.attributes.items.len);
+    // trace_id and span_id are stored as raw bytes (not hex strings).
+    try std.testing.expectEqualSlices(u8, &trace_id, otlp_log.trace_id);
+    try std.testing.expectEqualSlices(u8, &span_id, otlp_log.span_id);
+    // Source location attributes
+    try std.testing.expectEqualStrings("code.filepath", otlp_log.attributes.items[2].key);
+    try std.testing.expectEqualStrings("src/mylib.zig", otlp_log.attributes.items[2].value.?.value.?.string_value);
+    try std.testing.expectEqualStrings("code.function", otlp_log.attributes.items[3].key);
+    try std.testing.expectEqualStrings("doWork", otlp_log.attributes.items[3].value.?.value.?.string_value);
+    try std.testing.expectEqualStrings("code.namespace", otlp_log.attributes.items[4].key);
+    try std.testing.expectEqualStrings("mylib", otlp_log.attributes.items[4].value.?.value.?.string_value);
+    try std.testing.expectEqualStrings("code.lineno", otlp_log.attributes.items[5].key);
+    try std.testing.expectEqual(@as(i64, 42), otlp_log.attributes.items[5].value.?.value.?.int_value);
 }
 
 test "Log records grouped by instrumentation scope" {
@@ -458,10 +486,11 @@ test "Log records grouped by instrumentation scope" {
             .span_id = null,
             .severity_number = 9,
             .severity_text = "INFO",
-            .body = "Message from lib1",
+            .body = .{ .string = "Message from lib1" },
             .attributes = &[_]attribute.Attribute{},
             .resource = null,
             .scope = scope1,
+            .location = null,
         },
         logs.ReadableLogRecord{
             .timestamp = null,
@@ -470,10 +499,11 @@ test "Log records grouped by instrumentation scope" {
             .span_id = null,
             .severity_number = 17,
             .severity_text = "ERROR",
-            .body = "Message from lib2",
+            .body = .{ .string = "Message from lib2" },
             .attributes = &[_]attribute.Attribute{},
             .resource = null,
             .scope = scope2,
+            .location = null,
         },
         logs.ReadableLogRecord{
             .timestamp = null,
@@ -482,10 +512,11 @@ test "Log records grouped by instrumentation scope" {
             .span_id = null,
             .severity_number = 9,
             .severity_text = "INFO",
-            .body = "Another message from lib1",
+            .body = .{ .string = "Another message from lib1" },
             .attributes = &[_]attribute.Attribute{},
             .resource = null,
             .scope = scope1,
+            .location = null,
         },
     };
 
@@ -553,10 +584,11 @@ test "Resource attributes in OTLP export" {
             .span_id = null,
             .severity_number = 9,
             .severity_text = "INFO",
-            .body = "Test message",
+            .body = .{ .string = "Test message" },
             .attributes = &[_]attribute.Attribute{},
             .resource = resource_attrs,
             .scope = scope,
+            .location = null,
         },
     };
 
@@ -576,7 +608,7 @@ test "Resource attributes in OTLP export" {
     try std.testing.expectEqualStrings("my-service", resource.attributes.items[0].value.?.value.?.string_value);
 }
 
-test "Trace context hex conversion" {
+test "Trace context binary encoding" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -600,10 +632,11 @@ test "Trace context hex conversion" {
         .span_id = span_id,
         .severity_number = 9,
         .severity_text = "INFO",
-        .body = "Test",
+        .body = .{ .string = "Test" },
         .attributes = &[_]attribute.Attribute{},
         .resource = null,
         .scope = scope,
+        .location = null,
     };
 
     var otlp_log = try exporter.logRecordToOTLP(log_record);
@@ -613,9 +646,8 @@ test "Trace context hex conversion" {
         if (otlp_log.span_id.len > 0) allocator.free(otlp_log.span_id);
     }
 
-    // Verify hex conversion (lowercase hex without 0x prefix)
-    try std.testing.expectEqualStrings("0123456789abcdef0123456789abcdef", otlp_log.trace_id);
-    try std.testing.expectEqualStrings("0123456789abcdef", otlp_log.span_id);
+    try std.testing.expectEqualSlices(u8, &trace_id, otlp_log.trace_id);
+    try std.testing.expectEqualSlices(u8, &span_id, otlp_log.span_id);
 }
 
 test "Memory cleanup verification" {
@@ -645,10 +677,11 @@ test "Memory cleanup verification" {
             .span_id = null,
             .severity_number = 9,
             .severity_text = "INFO",
-            .body = "Test",
+            .body = .{ .string = "Test" },
             .attributes = attrs,
             .resource = null,
             .scope = scope,
+            .location = null,
         },
     };
 
