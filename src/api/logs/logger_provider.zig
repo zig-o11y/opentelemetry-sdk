@@ -384,11 +384,9 @@ pub const Logger = struct {
         defer log_record.deinit(self.allocator);
 
         if (options.attributes) |attrs| {
-            for (attrs) |attr| {
-                log_record.setAttribute(self.allocator, attr) catch |err| {
-                    std.log.err("Failed to add attribute to log record: {}", .{err});
-                };
-            }
+            log_record.attributes.appendSlice(self.allocator, attrs) catch |err| {
+                std.log.err("Failed to add attributes to log record: {}", .{err});
+            };
         }
         self.provider.mutex.lockUncancelable(self.provider.io);
         defer self.provider.mutex.unlock(self.provider.io);
