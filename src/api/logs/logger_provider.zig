@@ -63,34 +63,38 @@ pub const ReadWriteLogRecord = struct {
         self.attributes.deinit(allocator);
     }
 
-    /// Convert to immutable ReadableLogRecord for export
+    /// Convert to immutable ReadableLogRecord for export.
+    /// All string data is deep-copied into a heap-allocated arena; the caller's strings need
+    /// only remain valid for the duration of this call.
     pub fn toReadable(self: *const Self, allocator: std.mem.Allocator) !ReadableLogRecord {
-        const attrs = try allocator.alloc(Attribute, self.attributes.items.len);
-        errdefer allocator.free(attrs);
-        @memcpy(attrs, self.attributes.items);
+        const arena: *std.heap.ArenaAllocator = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = .init(allocator);
+        errdefer arena.deinit();
 
-        // Copy severity_text if present
-        const severity_text = if (self.severity_text) |text|
-            try allocator.dupe(u8, text)
-        else
-            null;
-        errdefer if (severity_text) |text| allocator.free(text);
+        const alloc = arena.allocator();
 
-        // Copy body if present
-        const body = if (self.body) |b|
-            try allocator.dupe(u8, b)
-        else
-            null;
-        errdefer if (body) |b| allocator.free(b);
+        const attrs = try alloc.alloc(Attribute, self.attributes.items.len);
+        for (self.attributes.items, attrs) |source, *dest| {
+            dest.* = .{
+                // most probably comptime constant, but we can't know for sure
+                .key = try alloc.dupe(u8, attr.key),
+                .value = switch (attr.value) {
+                    .string => |s| .{ .string = try alloc.dupe(u8, s) },
+                    else => attr.value,
+                },
+            };
+        }
 
-        return ReadableLogRecord{
+        return .{
+            .arena = arena,
             .timestamp = self.timestamp,
             .observed_timestamp = self.observed_timestamp,
             .trace_id = self.trace_id,
             .span_id = self.span_id,
             .severity_number = self.severity_number,
-            .severity_text = severity_text,
-            .body = body,
+            .severity_text = if (self.severity_text) |t| try a.dupe(u8, t) else null,
+            .body = if (self.body) |b| try a.dupe(u8, b) else null,
             .attributes = attrs,
             .resource = self.resource,
             .scope = self.scope,
@@ -99,25 +103,31 @@ pub const ReadWriteLogRecord = struct {
 };
 
 /// ReadableLogRecord is an immutable log record passed to exporters.
+///
+/// All owned data lives in its arena.
+///
 /// see: https://opentelemetry.io/docs/specs/otel/logs/sdk/#logrecordexporter
 pub const ReadableLogRecord = struct {
+    arena: *std.heap.ArenaAllocator,
     timestamp: ?u64,
     observed_timestamp: u64,
     trace_id: ?[16]u8,
     span_id: ?[8]u8,
     severity_number: ?u8,
-    severity_text: ?[]const u8,
-    body: ?[]const u8,
-    attributes: []const Attribute,
+    severity_text: ?[]u8,
+    body: ?[]u8,
+    attributes: []Attribute,
+    /// points into the LoggerProvider's resource
     resource: ?[]const Attribute,
+    /// points into the Logger's scope
     scope: InstrumentationScope,
 
     const Self = @This();
 
-    pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
-        allocator.free(self.attributes);
-        if (self.severity_text) |text| allocator.free(text);
-        if (self.body) |b| allocator.free(b);
+    pub fn deinit(self: Self) void {
+        const child = self.arena.child_allocator;
+        self.arena.deinit();
+        child.destroy(self.arena);
     }
 };
 

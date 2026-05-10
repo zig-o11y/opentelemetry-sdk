@@ -22,9 +22,10 @@ const LogRecordQueue = struct {
     }
 
     fn deinitItems(self: *LogRecordQueue, allocator: std.mem.Allocator) void {
+        _ = allocator;
         for (0..self.len) |i| {
             const index = (self.head + i) % self.buffer.len;
-            self.buffer[index].deinit(allocator);
+            self.buffer[index].deinit();
         }
     }
 
@@ -143,7 +144,7 @@ pub const SimpleLogRecordProcessor = struct {
             std.log.err("SimpleLogRecordProcessor failed to convert log record: {}", .{err});
             return;
         };
-        defer readable.deinit(self.allocator);
+        defer readable.deinit();
 
         var log_records = [_]logs.ReadableLogRecord{readable};
         self.exporter.exportLogs(log_records[0..]) catch |err| {
@@ -272,7 +273,7 @@ pub const BatchingLogRecordProcessor = struct {
 
         if (!self.queue.push(readable)) {
             std.log.err("BatchingLogRecordProcessor failed to add log record to queue", .{});
-            readable.deinit(self.allocator);
+            readable.deinit();
             return;
         }
 
@@ -361,9 +362,7 @@ pub const BatchingLogRecordProcessor = struct {
         // Export the batch (unlock mutex during export)
         self.mutex.unlock(self.io);
         defer self.mutex.lockUncancelable(self.io);
-        defer for (export_logs) |log_record| {
-            log_record.deinit(self.allocator);
-        };
+        defer for (export_logs) |log_record| log_record.deinit();
 
         self.exporter.exportLogs(logs_to_export) catch |err| {
             std.log.err("BatchingLogRecordProcessor failed to export log batch: {}", .{err});
@@ -402,38 +401,27 @@ test "SimpleLogRecordProcessor basic functionality" {
         }
 
         pub fn deinit(self: *@This()) void {
-            for (self.exported_logs.items) |log_record| {
-                log_record.deinit(self.allocator);
-            }
+            for (self.exported_logs.items) |log_record| log_record.deinit();
             self.exported_logs.deinit(self.allocator);
         }
 
         pub fn exportLogs(ctx: *anyopaque, log_records: []logs.ReadableLogRecord) anyerror!void {
             const self: *@This() = @ptrCast(@alignCast(ctx));
             for (log_records) |log_record| {
-                // Make a copy since we're storing it
-                const attrs = try self.allocator.alloc(@import("../../attributes.zig").Attribute, log_record.attributes.len);
+                const arena = try self.allocator.create(std.heap.ArenaAllocator);
+                arena.* = std.heap.ArenaAllocator.init(self.allocator);
+                const a = arena.allocator();
+                const attrs = try a.alloc(@import("../../attributes.zig").Attribute, log_record.attributes.len);
                 @memcpy(attrs, log_record.attributes);
-
-                // Copy severity_text and body strings since they will be freed after export
-                const severity_text = if (log_record.severity_text) |text|
-                    try self.allocator.dupe(u8, text)
-                else
-                    null;
-
-                const body = if (log_record.body) |b|
-                    try self.allocator.dupe(u8, b)
-                else
-                    null;
-
                 try self.exported_logs.append(self.allocator, .{
+                    .arena = arena,
                     .timestamp = log_record.timestamp,
                     .observed_timestamp = log_record.observed_timestamp,
                     .trace_id = log_record.trace_id,
                     .span_id = log_record.span_id,
                     .severity_number = log_record.severity_number,
-                    .severity_text = severity_text,
-                    .body = body,
+                    .severity_text = if (log_record.severity_text) |t| try a.dupe(u8, t) else null,
+                    .body = if (log_record.body) |b| try a.dupe(u8, b) else null,
                     .attributes = attrs,
                     .resource = log_record.resource,
                     .scope = log_record.scope,
