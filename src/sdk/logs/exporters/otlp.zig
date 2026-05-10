@@ -221,10 +221,10 @@ pub const OTLPExporter = struct {
             attributes.appendAssumeCapacity(try attributeToOTLP(attr.key, attr.value));
         }
         if (log_record.location) |loc| {
-            attributes.appendAssumeCapacity(try attributeToOTLP("code.filepath", .{ .string = loc.file }));
-            attributes.appendAssumeCapacity(try attributeToOTLP("code.function", .{ .string = loc.fn_name }));
-            attributes.appendAssumeCapacity(try attributeToOTLP("code.namespace", .{ .string = loc.module }));
-            attributes.appendAssumeCapacity(try attributeToOTLP("code.lineno", .{ .int = @intCast(loc.line) }));
+            attributes.appendAssumeCapacity(try attributeToOTLP("code.file.path", .{ .string = loc.file }));
+            attributes.appendAssumeCapacity(try attributeToOTLP("code.function.name", .{ .string = loc.fn_name }));
+            attributes.appendAssumeCapacity(try attributeToOTLP("code.line.number", .{ .int = @intCast(loc.line) }));
+            attributes.appendAssumeCapacity(try attributeToOTLP("code.column.number", .{ .int = @intCast(loc.column) }));
         }
 
         // trace_id and span_id are protobuf `bytes` fields.
@@ -441,14 +441,14 @@ test "Log record to OTLP conversion with all fields" {
     try std.testing.expectEqualSlices(u8, &trace_id, otlp_log.trace_id);
     try std.testing.expectEqualSlices(u8, &span_id, otlp_log.span_id);
     // Source location attributes
-    try std.testing.expectEqualStrings("code.filepath", otlp_log.attributes.items[2].key);
+    try std.testing.expectEqualStrings("code.file.path", otlp_log.attributes.items[2].key);
     try std.testing.expectEqualStrings("src/mylib.zig", otlp_log.attributes.items[2].value.?.value.?.string_value);
-    try std.testing.expectEqualStrings("code.function", otlp_log.attributes.items[3].key);
+    try std.testing.expectEqualStrings("code.function.name", otlp_log.attributes.items[3].key);
     try std.testing.expectEqualStrings("doWork", otlp_log.attributes.items[3].value.?.value.?.string_value);
-    try std.testing.expectEqualStrings("code.namespace", otlp_log.attributes.items[4].key);
-    try std.testing.expectEqualStrings("mylib", otlp_log.attributes.items[4].value.?.value.?.string_value);
-    try std.testing.expectEqualStrings("code.lineno", otlp_log.attributes.items[5].key);
-    try std.testing.expectEqual(@as(i64, 42), otlp_log.attributes.items[5].value.?.value.?.int_value);
+    try std.testing.expectEqualStrings("code.line.number", otlp_log.attributes.items[4].key);
+    try std.testing.expectEqual(@as(i64, 42), otlp_log.attributes.items[4].value.?.value.?.int_value);
+    try std.testing.expectEqualStrings("code.column.number", otlp_log.attributes.items[5].key);
+    try std.testing.expectEqual(@as(i64, 4), otlp_log.attributes.items[5].value.?.value.?.int_value);
 }
 
 test "Log records grouped by instrumentation scope" {
