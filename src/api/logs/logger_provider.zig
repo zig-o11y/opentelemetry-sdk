@@ -338,11 +338,9 @@ pub const Logger = struct {
         log_record.span_id = if (options.span_context) |sc| sc.span_id.toBinary() else null;
 
         if (options.attributes) |attrs| {
-            for (attrs) |attr| {
-                log_record.setAttribute(self.allocator, attr) catch |err| {
-                    std.log.err("Failed to add attribute to log record: {}", .{err});
-                };
-            }
+            log_record.attributes.appendSlice(self.allocator, attrs) catch |err| {
+                std.log.err("Failed to add attributes to log record: {}", .{err});
+            };
         }
 
         const ctx = Context.init();
