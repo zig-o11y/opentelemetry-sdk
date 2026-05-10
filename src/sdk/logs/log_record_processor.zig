@@ -31,9 +31,12 @@ const LogRecordQueue = struct {
 
     fn popBatch(self: *LogRecordQueue, dest: []logs.ReadableLogRecord) []logs.ReadableLogRecord {
         const count = @min(dest.len, self.len);
-        for (0..count) |i| {
-            const index = (self.head + i) % self.buffer.len;
-            dest[i] = self.buffer[index];
+        const splitpoint = self.buffer.len - self.head;
+        if (count <= splitpoint) {
+            @memcpy(dest[0..count], self.buffer[self.head..][0..count]);
+        } else {
+            @memcpy(dest[0..splitpoint], self.buffer[self.head..]);
+            @memcpy(dest[splitpoint..count], self.buffer[0 .. count - splitpoint]);
         }
         self.len -= count;
         if (self.len == 0) {
@@ -676,4 +679,46 @@ test "integration: multiple processors in pipeline" {
     try std.testing.expectEqual(@as(usize, 1), log_record.attributes.items.len);
     try std.testing.expectEqualStrings("processor.first", log_record.attributes.items[0].key);
     try std.testing.expectEqual(@as(u8, 17), log_record.severity_number.?); // Modified by second processor
+}
+
+test "LogRecordQueue wrap-around split" {
+    const allocator = std.testing.allocator;
+
+    var queue = try LogRecordQueue.init(allocator, 4);
+    defer queue.deinit(allocator);
+
+    const rec = struct {
+        fn make(ts: u64) logs.ReadableLogRecord {
+            return .{
+                .timestamp = null,
+                .observed_timestamp = ts,
+                .trace_id = null,
+                .span_id = null,
+                .severity_number = null,
+                .severity_text = null,
+                .body = null,
+                .attributes = &.{},
+                .resource = null,
+                .scope = .{ .name = "t" },
+            };
+        }
+    }.make;
+
+    // Push 2, pop 2 — head advances to 2
+    try std.testing.expect(queue.push(rec(1)));
+    try std.testing.expect(queue.push(rec(2)));
+    var dest: [4]logs.ReadableLogRecord = undefined;
+    _ = queue.popBatch(dest[0..2]);
+
+    // Push 3 — occupies slots 2, 3, 0 (wraps around)
+    try std.testing.expect(queue.push(rec(3)));
+    try std.testing.expect(queue.push(rec(4)));
+    try std.testing.expect(queue.push(rec(5)));
+
+    // Pop 3: splitpoint = 4 - 2 = 2, count = 3 > splitpoint → second @memcpy fires
+    const batch = queue.popBatch(dest[0..3]);
+    try std.testing.expectEqual(@as(usize, 3), batch.len);
+    try std.testing.expectEqual(@as(u64, 3), batch[0].observed_timestamp);
+    try std.testing.expectEqual(@as(u64, 4), batch[1].observed_timestamp);
+    try std.testing.expectEqual(@as(u64, 5), batch[2].observed_timestamp);
 }
