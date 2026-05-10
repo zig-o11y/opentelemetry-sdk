@@ -37,6 +37,7 @@ pub const ReadWriteLogRecord = struct {
     attributes: std.ArrayListUnmanaged(Attribute),
     resource: ?[]const Attribute,
     scope: InstrumentationScope,
+    location: ?std.builtin.SourceLocation,
 
     const Self = @This();
 
@@ -52,6 +53,7 @@ pub const ReadWriteLogRecord = struct {
             .attributes = .empty,
             .resource = null,
             .scope = scope,
+            .location = null,
         };
     }
 
@@ -78,6 +80,7 @@ pub const ReadWriteLogRecord = struct {
             .attributes = self.attributes.items,
             .resource = self.resource,
             .scope = self.scope,
+            .location = self.location,
         };
     }
 
@@ -106,6 +109,7 @@ pub const ReadWriteLogRecord = struct {
             .attributes = attrs,
             .resource = self.resource,
             .scope = self.scope,
+            .location = self.location,
         };
     }
 };
@@ -130,6 +134,7 @@ pub const ReadableLogRecord = struct {
     resource: ?[]const Attribute,
     /// points into the Logger's scope
     scope: InstrumentationScope,
+    location: ?std.builtin.SourceLocation,
 };
 
 /// SDK LoggerProvider implementation
@@ -314,6 +319,10 @@ pub const Logger = struct {
         /// Span context to correlate this log record with an active trace.
         /// Pass `span.span_context` to enable log-trace correlation in the backend.
         span_context: ?trace.SpanContext = null,
+
+        /// Source location of the log call site. Pass `@src()` to capture
+        /// file, function name, line, and column at compile time.
+        location: ?std.builtin.SourceLocation = null,
     };
 
     /// Emit a log record.
@@ -336,6 +345,7 @@ pub const Logger = struct {
         log_record.resource = self.provider.resource;
         log_record.trace_id = if (options.span_context) |sc| sc.trace_id.toBinary() else null;
         log_record.span_id = if (options.span_context) |sc| sc.span_id.toBinary() else null;
+        log_record.location = options.location;
 
         if (options.attributes) |attrs| {
             log_record.attributes.appendSlice(self.allocator, attrs) catch |err| {
