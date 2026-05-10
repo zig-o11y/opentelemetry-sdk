@@ -382,34 +382,8 @@ pub const Logger = struct {
         body: []const u8,
         options: EmitOptions,
     ) void {
-        if (self.provider.sdk_disabled or self.provider.is_shutdown.load(.acquire)) {
-            return;
-        }
-
-        var log_record = ReadWriteLogRecord.init(self.scope);
-        defer log_record.deinit(self.allocator);
-
-        log_record.severity_number = severity_number;
-        log_record.severity_text = options.severity_text;
-        log_record.body = .{ .string = body };
-        log_record.resource = self.provider.resource;
-        log_record.trace_id = if (options.span_context) |sc| sc.trace_id.toBinary() else null;
-        log_record.span_id = if (options.span_context) |sc| sc.span_id.toBinary() else null;
-        log_record.location = options.location;
-
-        if (options.attributes) |attrs| {
-            log_record.attributes.appendSlice(self.allocator, attrs) catch |err| {
-                std.log.err("Failed to add attributes to log record: {}", .{err});
-            };
-        }
-
-        const ctx = Context.init();
-        self.provider.mutex.lockUncancelable(self.provider.io);
-        defer self.provider.mutex.unlock(self.provider.io);
-
-        for (self.provider.processors.items) |processor| {
-            processor.onEmit(&log_record, ctx);
-        }
+        if (self.provider.sdk_disabled or self.provider.is_shutdown.load(.acquire)) return;
+        self.emitRecord(severity_number, .{ .string = body }, options);
     }
 
     /// Emit a structured log record whose body is a set of key-value fields.
@@ -439,13 +413,16 @@ pub const Logger = struct {
                 .value = structFieldToAttributeValue(@field(data, field.name)),
             };
         }
+        self.emitRecord(severity_number, .{ .structured = &body_attrs }, options);
+    }
 
+    fn emitRecord(self: *Self, severity_number: u8, body: ?Body, options: EmitOptions) void {
         var log_record = ReadWriteLogRecord.init(self.scope);
         defer log_record.deinit(self.allocator);
 
         log_record.severity_number = severity_number;
         log_record.severity_text = options.severity_text;
-        log_record.body = .{ .structured = &body_attrs };
+        log_record.body = body;
         log_record.resource = self.provider.resource;
         log_record.trace_id = if (options.span_context) |sc| sc.trace_id.toBinary() else null;
         log_record.span_id = if (options.span_context) |sc| sc.span_id.toBinary() else null;
