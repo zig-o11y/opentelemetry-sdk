@@ -21,14 +21,6 @@ const LogRecordQueue = struct {
         self.* = .{};
     }
 
-    fn deinitItems(self: *LogRecordQueue, allocator: std.mem.Allocator) void {
-        _ = allocator;
-        for (0..self.len) |i| {
-            const index = (self.head + i) % self.buffer.len;
-            self.buffer[index].deinit();
-        }
-    }
-
     fn push(self: *LogRecordQueue, log_record: logs.ReadableLogRecord) bool {
         if (self.len >= self.buffer.len) return false;
         const index = (self.head + self.len) % self.buffer.len;
@@ -105,16 +97,14 @@ pub const LogRecordProcessor = struct {
 /// SimpleLogRecordProcessor passes log records to the configured exporter immediately.
 /// see: https://opentelemetry.io/docs/specs/otel/logs/sdk/#simple-processor
 pub const SimpleLogRecordProcessor = struct {
-    allocator: std.mem.Allocator,
     exporter: LogRecordExporter,
     mutex: std.Io.Mutex,
     io: std.Io,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, io: std.Io, exporter: LogRecordExporter) Self {
+    pub fn init(io: std.Io, exporter: LogRecordExporter) Self {
         return Self{
-            .allocator = allocator,
             .exporter = exporter,
             .mutex = std.Io.Mutex.init,
             .io = io,
@@ -139,14 +129,7 @@ pub const SimpleLogRecordProcessor = struct {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
 
-        // Convert to readable and export immediately
-        const readable = log_record.toReadable(self.allocator) catch |err| {
-            std.log.err("SimpleLogRecordProcessor failed to convert log record: {}", .{err});
-            return;
-        };
-        defer readable.deinit();
-
-        var log_records = [_]logs.ReadableLogRecord{readable};
+        var log_records = [_]logs.ReadableLogRecord{log_record.asReadable()};
         self.exporter.exportLogs(log_records[0..]) catch |err| {
             std.log.err("SimpleLogRecordProcessor failed to export log record: {}", .{err});
         };
@@ -185,6 +168,7 @@ pub const BatchingLogRecordProcessor = struct {
 
     // State
     queue: LogRecordQueue,
+    batch_arena: std.heap.ArenaAllocator,
     mutex: std.Io.Mutex,
     wake: std.Io.Event,
     io: std.Io,
@@ -219,6 +203,7 @@ pub const BatchingLogRecordProcessor = struct {
             .export_timeout_millis = config.export_timeout_millis,
             .max_export_batch_size = max_export_batch_size,
             .queue = queue,
+            .batch_arena = std.heap.ArenaAllocator.init(allocator),
             .mutex = std.Io.Mutex.init,
             .wake = .unset,
             .io = io,
@@ -236,8 +221,8 @@ pub const BatchingLogRecordProcessor = struct {
         // Shutdown should have been called before deinit
         std.debug.assert(self.export_task == null);
 
-        self.queue.deinitItems(self.allocator);
         self.queue.deinit(self.allocator);
+        self.batch_arena.deinit();
         self.allocator.destroy(self);
     }
 
@@ -265,15 +250,14 @@ pub const BatchingLogRecordProcessor = struct {
             return;
         }
 
-        // Convert to readable and add to queue
-        const readable = log_record.toReadable(self.allocator) catch |err| {
+        // Deep-copy into the batch arena and enqueue
+        const readable = log_record.toReadable(self.batch_arena.allocator()) catch |err| {
             std.log.err("BatchingLogRecordProcessor failed to convert log record: {}", .{err});
             return;
         };
 
         if (!self.queue.push(readable)) {
             std.log.err("BatchingLogRecordProcessor failed to add log record to queue", .{});
-            readable.deinit();
             return;
         }
 
@@ -355,18 +339,24 @@ pub const BatchingLogRecordProcessor = struct {
             std.log.err("BatchingLogRecordProcessor failed to allocate memory for export batch", .{});
             return false;
         };
-        defer self.allocator.free(export_logs);
 
         const logs_to_export = self.queue.popBatch(export_logs);
 
-        // Export the batch (unlock mutex during export)
+        // Export the batch (unlock mutex during export to allow concurrent onEmit calls)
         self.mutex.unlock(self.io);
-        defer self.mutex.lockUncancelable(self.io);
-        defer for (export_logs) |log_record| log_record.deinit();
-
         self.exporter.exportLogs(logs_to_export) catch |err| {
             std.log.err("BatchingLogRecordProcessor failed to export log batch: {}", .{err});
         };
+        self.mutex.lockUncancelable(self.io);
+
+        self.allocator.free(export_logs);
+
+        // Reset the batch arena once the queue is fully drained — all records have been exported
+        // and no remaining records point into the arena.
+        if (self.queue.len == 0) {
+            _ = self.batch_arena.reset(.retain_capacity);
+        }
+
         return true;
     }
 
@@ -401,32 +391,13 @@ test "SimpleLogRecordProcessor basic functionality" {
         }
 
         pub fn deinit(self: *@This()) void {
-            for (self.exported_logs.items) |log_record| log_record.deinit();
             self.exported_logs.deinit(self.allocator);
         }
 
         pub fn exportLogs(ctx: *anyopaque, log_records: []logs.ReadableLogRecord) anyerror!void {
             const self: *@This() = @ptrCast(@alignCast(ctx));
             for (log_records) |log_record| {
-                const arena = try self.allocator.create(std.heap.ArenaAllocator);
-                arena.* = std.heap.ArenaAllocator.init(self.allocator);
-                const a = arena.allocator();
-                const attrs = try a.alloc(@import("../../attributes.zig").Attribute, log_record.attributes.len);
-                @memcpy(attrs, log_record.attributes);
-                try self.exported_logs.append(self.allocator, .{
-                    .arena = arena,
-                    .timestamp = log_record.timestamp,
-                    .observed_timestamp = log_record.observed_timestamp,
-                    .trace_id = log_record.trace_id,
-                    .span_id = log_record.span_id,
-                    .trace_flags = log_record.trace_flags,
-                    .severity_number = log_record.severity_number,
-                    .severity_text = if (log_record.severity_text) |t| try a.dupe(u8, t) else null,
-                    .body = if (log_record.body) |b| try a.dupe(u8, b) else null,
-                    .attributes = attrs,
-                    .resource = log_record.resource,
-                    .scope = log_record.scope,
-                });
+                try self.exported_logs.append(self.allocator, log_record);
             }
         }
 
@@ -447,7 +418,7 @@ test "SimpleLogRecordProcessor basic functionality" {
     defer mock_exporter.deinit();
 
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, io, exporter);
+    var processor = SimpleLogRecordProcessor.init(io, exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     // Create a test log record
@@ -499,7 +470,7 @@ test "SimpleLogRecordProcessor with attributes" {
 
     var mock_exporter = MockExporter{};
     const exporter = mock_exporter.asLogRecordExporter();
-    var processor = SimpleLogRecordProcessor.init(allocator, io, exporter);
+    var processor = SimpleLogRecordProcessor.init(io, exporter);
     const log_processor = processor.asLogRecordProcessor();
 
     // Create a test log record with attributes
