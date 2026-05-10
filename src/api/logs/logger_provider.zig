@@ -34,6 +34,7 @@ pub const ReadWriteLogRecord = struct {
     severity_number: ?u8,
     severity_text: ?[]const u8,
     body: ?[]const u8,
+    structured_body: ?[]const Attribute,
     attributes: std.ArrayListUnmanaged(Attribute),
     resource: ?[]const Attribute,
     scope: InstrumentationScope,
@@ -50,6 +51,7 @@ pub const ReadWriteLogRecord = struct {
             .severity_number = null,
             .severity_text = null,
             .body = null,
+            .structured_body = null,
             .attributes = .empty,
             .resource = null,
             .scope = scope,
@@ -77,6 +79,7 @@ pub const ReadWriteLogRecord = struct {
             .severity_number = self.severity_number,
             .severity_text = self.severity_text,
             .body = self.body,
+            .structured_body = self.structured_body,
             .attributes = self.attributes.items,
             .resource = self.resource,
             .scope = self.scope,
@@ -98,6 +101,20 @@ pub const ReadWriteLogRecord = struct {
                 },
             };
         }
+        const structured_body: ?[]Attribute = if (self.structured_body) |sb| blk: {
+            const copy = try allocator.alloc(Attribute, sb.len);
+            for (sb, copy) |source, *dest| {
+                dest.* = .{
+                    .key = source.key,
+                    .value = switch (source.value) {
+                        .string => |s| .{ .string = try allocator.dupe(u8, s) },
+                        else => source.value,
+                    },
+                };
+            }
+            break :blk copy;
+        } else null;
+
         return .{
             .timestamp = self.timestamp,
             .observed_timestamp = self.observed_timestamp,
@@ -106,6 +123,7 @@ pub const ReadWriteLogRecord = struct {
             .severity_number = self.severity_number,
             .severity_text = if (self.severity_text) |t| try allocator.dupe(u8, t) else null,
             .body = if (self.body) |b| try allocator.dupe(u8, b) else null,
+            .structured_body = structured_body,
             .attributes = attrs,
             .resource = self.resource,
             .scope = self.scope,
@@ -129,6 +147,7 @@ pub const ReadableLogRecord = struct {
     severity_number: ?u8,
     severity_text: ?[]const u8,
     body: ?[]const u8,
+    structured_body: ?[]const Attribute,
     attributes: []const Attribute,
     /// points into the LoggerProvider's resource
     resource: ?[]const Attribute,
@@ -285,6 +304,32 @@ pub const LoggerProvider = struct {
     }
 };
 
+fn structFieldToAttributeValue(v: anytype) AttributeValue {
+    const T = @TypeOf(v);
+    return switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .slice => if (p.child == u8)
+                .{ .string = v }
+            else
+                @compileError("unsupported slice type for structured log field: " ++ @typeName(T)),
+            .one => switch (@typeInfo(p.child)) {
+                .array => |a| if (a.child == u8)
+                    .{ .string = v } // *const [N:0]u8 string literal
+                else
+                    @compileError("unsupported array type for structured log field: " ++ @typeName(T)),
+                else => @compileError("unsupported pointer type for structured log field: " ++ @typeName(T)),
+            },
+            else => @compileError("unsupported pointer type for structured log field: " ++ @typeName(T)),
+        },
+        .bool => .{ .bool = v },
+        .int => .{ .int = @as(i64, v) },
+        .comptime_int => .{ .int = @as(i64, v) },
+        .float => .{ .double = @as(f64, v) },
+        .comptime_float => .{ .double = @as(f64, v) },
+        else => @compileError("unsupported type for structured log field: " ++ @typeName(T)),
+    };
+}
+
 /// Logger implementation
 pub const Logger = struct {
     allocator: std.mem.Allocator,
@@ -342,6 +387,60 @@ pub const Logger = struct {
         log_record.severity_number = severity_number;
         log_record.severity_text = options.severity_text;
         log_record.body = body;
+        log_record.resource = self.provider.resource;
+        log_record.trace_id = if (options.span_context) |sc| sc.trace_id.toBinary() else null;
+        log_record.span_id = if (options.span_context) |sc| sc.span_id.toBinary() else null;
+        log_record.location = options.location;
+
+        if (options.attributes) |attrs| {
+            log_record.attributes.appendSlice(self.allocator, attrs) catch |err| {
+                std.log.err("Failed to add attributes to log record: {}", .{err});
+            };
+        }
+
+        const ctx = Context.init();
+        self.provider.mutex.lockUncancelable(self.provider.io);
+        defer self.provider.mutex.unlock(self.provider.io);
+
+        for (self.provider.processors.items) |processor| {
+            processor.onEmit(&log_record, ctx);
+        }
+    }
+
+    /// Emit a structured log record whose body is a set of key-value fields.
+    /// `data` must be an anonymous struct literal; each field becomes a kvlist entry in the body.
+    /// Field values must be one of: `[]const u8`, `bool`, `i64`, `f64` (or comptime equivalents).
+    ///
+    /// Example:
+    /// ```zig
+    /// logger.emitStructured(9, .{
+    ///     .@"http.method" = "GET",
+    ///     .@"http.status" = 200,
+    /// }, .{});
+    /// ```
+    pub fn emitStructured(
+        self: *Self,
+        severity_number: u8,
+        data: anytype,
+        options: EmitOptions,
+    ) void {
+        if (self.provider.sdk_disabled or self.provider.is_shutdown.load(.acquire)) return;
+
+        const fields = @typeInfo(@TypeOf(data)).@"struct".fields;
+        var body_attrs: [fields.len]Attribute = undefined;
+        inline for (fields, 0..) |field, i| {
+            body_attrs[i] = .{
+                .key = field.name,
+                .value = structFieldToAttributeValue(@field(data, field.name)),
+            };
+        }
+
+        var log_record = ReadWriteLogRecord.init(self.scope);
+        defer log_record.deinit(self.allocator);
+
+        log_record.severity_number = severity_number;
+        log_record.severity_text = options.severity_text;
+        log_record.structured_body = &body_attrs;
         log_record.resource = self.provider.resource;
         log_record.trace_id = if (options.span_context) |sc| sc.trace_id.toBinary() else null;
         log_record.span_id = if (options.span_context) |sc| sc.span_id.toBinary() else null;
@@ -838,4 +937,59 @@ test "LoggerProvider with config from environment" {
     try std.testing.expectEqual(lc.blrp_schedule_delay_ms, batch_processor.scheduled_delay_millis);
     try std.testing.expectEqual(lc.blrp_export_timeout_ms, batch_processor.export_timeout_millis);
     try std.testing.expectEqual(@as(usize, @intCast(lc.blrp_max_export_batch_size)), batch_processor.max_export_batch_size);
+}
+
+test "Logger.emitStructured produces structured_body with correct fields" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const MockExporter = struct {
+        field_count: usize = 0,
+        found_method: bool = false,
+        found_status: bool = false,
+        found_success: bool = false,
+        found_duration: bool = false,
+
+        pub fn exportLogs(ctx: *anyopaque, records: []ReadableLogRecord) anyerror!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            if (records.len == 0) return;
+            const sb = records[0].structured_body orelse return;
+            self.field_count = sb.len;
+            for (sb) |attr| {
+                if (std.mem.eql(u8, attr.key, "http.method"))
+                    self.found_method = std.mem.eql(u8, attr.value.string, "GET");
+                if (std.mem.eql(u8, attr.key, "http.status"))
+                    self.found_status = attr.value.int == 200;
+                if (std.mem.eql(u8, attr.key, "http.success"))
+                    self.found_success = attr.value.bool == true;
+                if (std.mem.eql(u8, attr.key, "http.duration_ms"))
+                    self.found_duration = attr.value.double == 12.5;
+            }
+        }
+        pub fn shutdown(_: *anyopaque) anyerror!void {}
+        pub fn asLogRecordExporter(self: *@This()) LogRecordExporter {
+            return .{ .ptr = self, .vtable = &.{ .exportLogsFn = exportLogs, .shutdownFn = shutdown } };
+        }
+    };
+
+    var mock = MockExporter{};
+    var processor = SimpleLogRecordProcessor.init(io, mock.asLogRecordExporter());
+
+    var provider = try LoggerProvider.init(allocator, io, null);
+    defer provider.deinit();
+    try provider.addLogRecordProcessor(processor.asLogRecordProcessor());
+
+    const logger = try provider.getLogger(.{ .name = "test" });
+    logger.emitStructured(9, .{
+        .@"http.method" = "GET",
+        .@"http.status" = 200,
+        .@"http.success" = true,
+        .@"http.duration_ms" = 12.5,
+    }, .{});
+
+    try std.testing.expectEqual(@as(usize, 4), mock.field_count);
+    try std.testing.expect(mock.found_method);
+    try std.testing.expect(mock.found_status);
+    try std.testing.expect(mock.found_success);
+    try std.testing.expect(mock.found_duration);
 }

@@ -692,6 +692,7 @@ test "LogRecordQueue wrap-around split" {
                 .attributes = &.{},
                 .resource = null,
                 .scope = .{ .name = "t" },
+                .structured_body = null,
                 .location = null,
             };
         }

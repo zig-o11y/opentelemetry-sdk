@@ -202,10 +202,15 @@ pub const OTLPExporter = struct {
 
                 // Clean up log records
                 for (scope_log.log_records.items) |*log_record| {
-                    // Clean up log record attributes
                     log_record.attributes.deinit(self.allocator);
                     if (log_record.trace_id.len > 0) self.allocator.free(log_record.trace_id);
                     if (log_record.span_id.len > 0) self.allocator.free(log_record.span_id);
+                    if (log_record.body) |*b| {
+                        if (b.value) |*v| switch (v.*) {
+                            .kvlist_value => |*kv| kv.values.deinit(self.allocator),
+                            else => {},
+                        };
+                    }
                 }
                 scope_log.log_records.deinit(self.allocator);
             }
@@ -241,8 +246,13 @@ pub const OTLPExporter = struct {
         else
             "";
 
-        // Convert body to AnyValue
-        const body: ?pbcommon.AnyValue = if (log_record.body) |b|
+        const body: ?pbcommon.AnyValue = if (log_record.structured_body) |sb| blk: {
+            var kvlist: std.ArrayList(pbcommon.KeyValue) = try .initCapacity(self.allocator, sb.len);
+            for (sb) |attr| {
+                kvlist.appendAssumeCapacity(try attributeToOTLP(attr.key, attr.value));
+            }
+            break :blk pbcommon.AnyValue{ .value = .{ .kvlist_value = .{ .values = kvlist } } };
+        } else if (log_record.body) |b|
             pbcommon.AnyValue{ .value = .{ .string_value = (b) } }
         else
             null;
@@ -419,6 +429,7 @@ test "Log record to OTLP conversion with all fields" {
         .attributes = attrs,
         .resource = null,
         .scope = scope,
+        .structured_body = null,
         .location = .{ .module = "mylib", .file = "src/mylib.zig", .fn_name = "doWork", .line = 42, .column = 4 },
     };
 
@@ -480,6 +491,7 @@ test "Log records grouped by instrumentation scope" {
             .attributes = &[_]attribute.Attribute{},
             .resource = null,
             .scope = scope1,
+            .structured_body = null,
             .location = null,
         },
         logs.ReadableLogRecord{
@@ -493,6 +505,7 @@ test "Log records grouped by instrumentation scope" {
             .attributes = &[_]attribute.Attribute{},
             .resource = null,
             .scope = scope2,
+            .structured_body = null,
             .location = null,
         },
         logs.ReadableLogRecord{
@@ -506,6 +519,7 @@ test "Log records grouped by instrumentation scope" {
             .attributes = &[_]attribute.Attribute{},
             .resource = null,
             .scope = scope1,
+            .structured_body = null,
             .location = null,
         },
     };
@@ -578,6 +592,7 @@ test "Resource attributes in OTLP export" {
             .attributes = &[_]attribute.Attribute{},
             .resource = resource_attrs,
             .scope = scope,
+            .structured_body = null,
             .location = null,
         },
     };
@@ -626,6 +641,7 @@ test "Trace context binary encoding" {
         .attributes = &[_]attribute.Attribute{},
         .resource = null,
         .scope = scope,
+        .structured_body = null,
         .location = null,
     };
 
@@ -671,6 +687,7 @@ test "Memory cleanup verification" {
             .attributes = attrs,
             .resource = null,
             .scope = scope,
+            .structured_body = null,
             .location = null,
         },
     };
