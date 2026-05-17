@@ -694,6 +694,7 @@ test "LogRecordQueue wrap-around split" {
                 .observed_timestamp = ts,
                 .trace_id = null,
                 .span_id = null,
+                .trace_flags = 0,
                 .severity_number = null,
                 .severity_text = null,
                 .body = null,

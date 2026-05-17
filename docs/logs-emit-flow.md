@@ -57,15 +57,15 @@ alive on the stack.
 
 Deep-copies all string data into the provided allocator:
 
-| Field | Handling |
-|---|---|
-| `body` | `allocator.dupe(u8, b)` |
-| `severity_text` | `allocator.dupe(u8, text)` |
-| `attributes` (string values) | `allocator.dupe(u8, s)` per string value and key |
-| `attributes` (non-string values) | copied by value (no heap) |
-| `trace_id`, `span_id` | copied by value (`[16]u8` / `[8]u8` arrays) |
-| `resource` | shallow pointer copy (owned by the provider, outlives all records) |
-| `scope` | copied by value |
+| Field                                | Handling                                                           |
+|--------------------------------------|--------------------------------------------------------------------|
+| `body`                               | `allocator.dupe(u8, b)`                                            |
+| `severity_text`                      | `allocator.dupe(u8, text)`                                         |
+| `attributes` (string values)         | `allocator.dupe(u8, s)` per string value and key                   |
+| `attributes` (non-string values)     | copied by value (no heap)                                          |
+| `trace_id`, `span_id`, `trace_flags` | copied by value (`[16]u8` / `[8]u8` arrays, `u8`)                  |
+| `resource`                           | shallow pointer copy (owned by the provider, outlives all records) |
+| `scope`                              | copied by value                                                    |
 
 The caller's strings only need to remain valid for the duration of this call.
 
@@ -120,15 +120,15 @@ sends. `cleanupRequest` frees the request's heap allocations.
 
 ## Lifetime summary
 
-| Data | Must stay valid until |
-|---|---|
-| `body` passed to `emit` | `emit` returns |
-| `options.severity_text` | `emit` returns |
-| `options.attributes` slice and its string values | `emit` returns |
-| `options.span_context` | `emit` returns (copied by value) |
-| `ReadableLogRecord` strings (Simple) | `exportLogs` returns — borrowed from the emit stack |
-| `ReadableLogRecord` strings (Batching) | `batch_arena.reset()` — after queue drains to zero |
-| OTLP protobuf request | `cleanupRequest` |
+| Data                                             | Must stay valid until                               |
+|--------------------------------------------------|-----------------------------------------------------|
+| `body` passed to `emit`                          | `emit` returns                                      |
+| `options.severity_text`                          | `emit` returns                                      |
+| `options.attributes` slice and its string values | `emit` returns                                      |
+| `options.span_context`                           | `emit` returns (copied by value)                    |
+| `ReadableLogRecord` strings (Simple)             | `exportLogs` returns — borrowed from the emit stack |
+| `ReadableLogRecord` strings (Batching)           | `batch_arena.reset()` — after queue drains to zero  |
+| OTLP protobuf request                            | `cleanupRequest`                                    |
 
 ## Known shallow copies
 

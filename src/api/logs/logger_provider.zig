@@ -89,6 +89,7 @@ pub const ReadWriteLogRecord = struct {
             .observed_timestamp = self.observed_timestamp,
             .trace_id = self.trace_id,
             .span_id = self.span_id,
+            .trace_flags = self.trace_flags,
             .severity_number = self.severity_number,
             .severity_text = if (self.severity_text) |t| try allocator.dupe(u8, t) else null,
             .body = if (self.body) |b| try allocator.dupe(u8, b) else null,
