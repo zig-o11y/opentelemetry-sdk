@@ -2,6 +2,10 @@
 
 # OpenTelemetry Zig
 
+> [!IMPORTANT]
+> This project is not maintained anymore!
+> We are proud to have moved it under OpenTelemetry, at [open-telemetry/opentelemetry-zig](https://github.com/open-telemetry/opentelemetry-zig/).
+
 <p><img title="jj logo" src="docs/images/zero-otel.png" width="320"></p>
 
 **[Zig docs] &nbsp;&nbsp;&bull;&nbsp;&nbsp;**
