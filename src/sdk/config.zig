@@ -268,6 +268,13 @@ pub const LogsConfig = struct {
     }
 };
 
+/// Resource detectors enabled via OTEL_EXPERIMENTAL_RESOURCE_DETECTORS.
+pub const ResourceDetectors = struct {
+    host: bool = false,
+    os: bool = false,
+    process: bool = false,
+};
+
 /// Global SDK Configuration
 pub const Configuration = @This();
 
@@ -275,6 +282,7 @@ allocator: std.mem.Allocator,
 
 // Global settings
 sdk_disabled: bool,
+resource_detectors: ResourceDetectors,
 service_name: ?[]const u8,
 resource_attributes: ?[]const u8,
 log_level: LogLevel,
@@ -308,6 +316,7 @@ pub fn init(allocator: std.mem.Allocator, env_map: *const EnvMap) !*Configuratio
     cfg.* = Configuration{
         .allocator = allocator,
         .sdk_disabled = parseBool(env_map, "OTEL_SDK_DISABLED") orelse false,
+        .resource_detectors = parseResourceDetectors(env_map),
         .service_name = if (env_map.get("OTEL_SERVICE_NAME")) |s|
             try allocator.dupe(u8, s)
         else
@@ -376,6 +385,21 @@ fn parseBool(env_map: *const EnvMap, key: []const u8) ?bool {
 fn parseInt(comptime T: type, env_map: *const EnvMap, key: []const u8) ?T {
     const value = env_map.get(key) orelse return null;
     return std.fmt.parseInt(T, value, 10) catch null;
+}
+
+/// Parse OTEL_EXPERIMENTAL_RESOURCE_DETECTORS (comma-separated detector names).
+/// Recognized names: "host", "os", "process". Unknown names are silently ignored.
+fn parseResourceDetectors(env_map: *const EnvMap) ResourceDetectors {
+    const value = env_map.get("OTEL_EXPERIMENTAL_RESOURCE_DETECTORS") orelse return .{};
+    var detectors: ResourceDetectors = .{};
+    var iter = std.mem.splitScalar(u8, value, ',');
+    while (iter.next()) |item| {
+        const name = std.mem.trim(u8, item, &std.ascii.whitespace);
+        if (std.ascii.eqlIgnoreCase(name, "host")) detectors.host = true;
+        if (std.ascii.eqlIgnoreCase(name, "os")) detectors.os = true;
+        if (std.ascii.eqlIgnoreCase(name, "process")) detectors.process = true;
+    }
+    return detectors;
 }
 
 /// Parse comma-separated list of propagators

@@ -47,13 +47,6 @@ pub fn build(b: *std.Build) !void {
         },
     });
 
-    { // Build info
-        const build_info = b.addOptions();
-        build_info.addOption([]const u8, "version", zon.version);
-        build_info.addOption([]const u8, "name", @tagName(zon.name));
-        sdk_mod.addOptions("build_info", build_info);
-    }
-
     // Static library for the OpenTelemetry SDK C users
     const sdk_c_lib_mod = b.createModule(.{
         .root_source_file = b.path("src/c.zig"),
@@ -66,6 +59,14 @@ pub fn build(b: *std.Build) !void {
             .{ .name = "clock", .module = clock_mod },
         },
     });
+    { // Build info
+        const build_info = b.addOptions();
+        build_info.addOption([]const u8, "version", zon.version);
+        build_info.addOption([]const u8, "name", @tagName(zon.name));
+        sdk_mod.addOptions("build_info", build_info);
+        sdk_c_lib_mod.addOptions("build_info", build_info);
+    }
+
     const sdk_lib = b.addLibrary(.{
         .name = "opentelemetry-sdk",
         .linkage = .static,
