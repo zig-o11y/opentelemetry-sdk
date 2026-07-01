@@ -1,10 +1,10 @@
-<div class="title-block" style="text-align: center;" align="center">
-
-# OpenTelemetry Zig
-
 > [!IMPORTANT]
 > This project is not maintained anymore!
 > We are proud to have moved it under OpenTelemetry, at [open-telemetry/opentelemetry-zig](https://github.com/open-telemetry/opentelemetry-zig/).
+
+<div class="title-block" style="text-align: center;" align="center">
+
+# OpenTelemetry Zig
 
 <p><img title="jj logo" src="docs/images/zero-otel.png" width="320"></p>
 
