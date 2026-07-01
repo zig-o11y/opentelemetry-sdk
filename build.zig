@@ -105,7 +105,8 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&run_sdk_unit_tests.step);
 
     // Examples
-    const examples_step = b.step("examples", "Build and run all examples");
+    const examples_step = b.step("examples", "Build and install examples to zig-out/bin/<category>/");
+    const run_examples_step = b.step("run-examples", "Run installed examples from zig-out");
     const examples_filter = b.option([]const u8, "examples-filter", "Filter examples to build");
 
     // Attach an OTLP stub module to allow examples to use it.
@@ -138,14 +139,11 @@ pub fn build(b: *std.Build) !void {
         };
         defer b.allocator.free(example);
         for (example) |step| {
-            const run_example = b.addRunArtifact(step);
-            examples_step.dependOn(&run_example.step);
+            wireExample(b, step, b.fmt("bin/{s}", .{example_dir}), examples_step, run_examples_step);
         }
     }
 
-    // C examples
-    const c_example_step = b.step("examples-c", "Build and run C examples");
-
+    // C examples — same wiring, but compiled from .c against the static lib.
     const c_examples = [_][]const u8{
         "logs",
         "metrics",
@@ -177,11 +175,7 @@ pub fn build(b: *std.Build) !void {
         c_example_exe.root_module.addIncludePath(b.path("include"));
         c_example_exe.root_module.linkLibrary(sdk_lib);
 
-        const run_c_example = b.addRunArtifact(c_example_exe);
-        c_example_step.dependOn(&run_c_example.step);
-
-        // Also install each C example executable
-        b.installArtifact(c_example_exe);
+        wireExample(b, c_example_exe, "bin/c", examples_step, run_examples_step);
     }
 
     // Benchmarks
@@ -220,16 +214,16 @@ pub fn build(b: *std.Build) !void {
         benchmarks_step.dependOn(&write.step);
     }
 
-    // Integration tests step
-    const integration_step = b.step("integration", "Run integration tests (requires Docker)");
+    // Integration tests
+    const integration_step = b.step("integration", "Build and install integration tests to zig-out/bin/integration_tests/");
+    const run_integration_step = b.step("run-integration", "Run installed integration tests (requires Docker)");
     const integration_tests = buildIntegrationTests(b, b.path("integration_tests"), sdk_mod, clock_mod) catch |build_err| {
         std.debug.print("Error building integration tests: {}\n", .{build_err});
         return build_err;
     };
     defer b.allocator.free(integration_tests);
     for (integration_tests) |step| {
-        const run_integration_test = b.addRunArtifact(step);
-        integration_step.dependOn(&run_integration_test.step);
+        wireExample(b, step, "bin/integration_tests", integration_step, run_integration_step);
     }
 
     // Documentation webiste with autodoc
@@ -258,6 +252,25 @@ pub fn build(b: *std.Build) !void {
     const docs_step = b.step("docs", "Copy documentation artifacts to prefix path");
     docs_step.dependOn(&sdk_lib.step);
     docs_step.dependOn(&install_docs.step);
+}
+
+/// Install `exe` into `zig-out/<install_subdir>/<exe.name>` and hook the
+/// install + a run-from-cache step into the build/run aggregator steps.
+fn wireExample(
+    b: *std.Build,
+    exe: *std.Build.Step.Compile,
+    install_subdir: []const u8,
+    build_step: *std.Build.Step,
+    run_step: *std.Build.Step,
+) void {
+    const install = b.addInstallArtifact(exe, .{
+        .dest_dir = .{ .override = .{ .custom = install_subdir } },
+    });
+    build_step.dependOn(&install.step);
+
+    const run = b.addRunArtifact(exe);
+    run.step.dependOn(&install.step);
+    run_step.dependOn(&run.step);
 }
 
 fn buildExamples(

@@ -36,7 +36,7 @@ The version of the OpenTelemetry specification targeted here is **1.48.0**.
 
 Run the following command to add the package to your `build.zig.zon` dependencies, replacing `<ref>` with a release version:
 
-```shall
+```shell
 zig fetch --save "git+https://github.com/zig-o11y/opentelemetry-sdk#<ref>"
 ```
 

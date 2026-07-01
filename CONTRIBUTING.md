@@ -6,19 +6,19 @@ The version of Zig used for development is declared in [`build.zig.zon`](./build
 
 ### Building the library
 
-Build the SDK library:
+Build the C SDK library:
 
-```
+```shell
 zig build
 ```
 
-This compiles the OpenTelemetry SDK as a static library in `zig-out/lib/`.
+This compiles the OpenTelemetry C SDK as a static library in `zig-out/lib/`, and associated headers in `zig-out/include`.
 
 ### Running tests
 
 Unit tests are executed as part of CI pipeline, you can run them locally while developing:
 
-```
+```shell
 zig build test
 ```
 
@@ -32,13 +32,13 @@ The test build supports the following options:
 
 To run only specific tests matching a pattern, use build args:
 
-```
+```shell
 zig build test -- "counter"
 ```
 
 Example usage:
 
-```
+```shell
 # Run tests with verbose output (shows test names and timing)
 zig build test -Dtest-verbose=true
 
@@ -53,39 +53,52 @@ zig build test -Dtest-show-logs=true
 
 Integration tests verify the SDK behavior against real OpenTelemetry backends. These tests require Docker to be installed and running.
 
-```
+```shell
+# Build and install the integration test binaries to zig-out/bin/integration_tests/
 zig build integration
+
+# Run them against a real OTLP collector (Docker required)
+zig build run-integration
+
+# Filter to a specific test by name
+zig build run-integration -- metrics
 ```
 
 Integration tests are executed as part of CI on pull requests.
 
 > [!IMPORTANT]
-> Integration tests require Docker to be installed and the Docker daemon to be running.
+> `run-integration` requires Docker to be installed and the Docker daemon to be running.
 
 ### Running examples
 
-Build and run all examples:
+The example workflow follows the same two-step layout as integration tests:
 
-```
+```shell
+# Build every example (Zig + C) and install to zig-out/bin/<category>/<name>
 zig build examples
+
+# Run the installed binaries
+zig build run-examples
 ```
 
 #### Examples options
 
-Filter examples to build and run specific ones:
+Filter to specific examples (applies to both `examples` and `run-examples`):
 
+```shell
+# Only examples whose name contains "otlp"
+zig build run-examples -Dexamples-filter=otlp
+
+# Only histogram examples
+zig build run-examples -Dexamples-filter=histogram
 ```
-# Run only examples matching "otlp"
-zig build examples -Dexamples-filter=otlp
 
-# Run only histogram examples
-zig build examples -Dexamples-filter=histogram
-```
-
-Examples are organized by signal type:
+Examples are organized by signal type and language:
 - `examples/metrics/` - Metrics API examples
 - `examples/trace/` - Tracing API examples
 - `examples/logs/` - Logging API examples
+- `examples/baggage/`, `examples/propagation/` - Context-propagation examples
+- `examples/c/` - C-API examples linking against the static library
 
 ### Running benchmarks
 
@@ -93,7 +106,7 @@ Benchmarks are executed as part of the pipeline on Pull Requests if they contain
 
 They can be executed locally with:
 
-```
+```shell
 zig build benchmarks -Doptimize=ReleaseFast
 ```
 
@@ -106,7 +119,7 @@ The benchmark build supports the following options:
 
 To run only specific benchmarks matching a pattern, use build args:
 
-```
+```shell
 # Run only counter benchmarks
 zig build benchmarks -Doptimize=ReleaseFast -- "counter"
 
@@ -126,11 +139,18 @@ zig build benchmarks -Dbenchmark-debug=true -- "counter"
 
 Generate API documentation:
 
-```
+```shell
 zig build docs
 ```
 
 Documentation will be generated in `zig-out/docs/` and can be viewed by opening `index.html` in a browser.
+
+For example:
+
+```shell
+python -m http.server -d zig-out/docs
+open "http://localhost:8000/"
+```
 
 ## Development Workflow
 
@@ -142,6 +162,3 @@ A typical development workflow:
 4. Run relevant examples: `zig build examples -Dexamples-filter=<signal>`
 5. Run benchmarks: `zig build benchmarks -Doptimize=ReleaseFast` (if performance-critical)
 6. Commit your changes
-
-
-
